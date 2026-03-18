@@ -10,8 +10,14 @@ export interface AuthenticatedRequest extends Request {
 }
 
 export const authenticateAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  // First try to get token from Authorization header (for API calls)
   const authHeader = req.headers['authorization'];
-  const token = jwtService.extractTokenFromHeader(authHeader);
+  let token = jwtService.extractTokenFromHeader(authHeader);
+
+  // If no token in header, try to get from cookies (for browser requests)
+  if (!token && req.cookies && req.cookies.admin_token) {
+    token = req.cookies.admin_token;
+  }
 
   if (!token) {
     res.status(401).json({ 

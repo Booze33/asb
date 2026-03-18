@@ -9,4 +9,4 @@ export const whatsappConfig = {
 };
 
 // Create Twilio client
-export const twilioClient = twilio(process.env.WHATSAPP_API_KEY, '');
+export const twilioClient = twilio(process.env.WHATSAPP_API_KEY, process.env.WHATSAPP_AUTH_TOKEN || '');

@@ -6,7 +6,7 @@ import { jwtService } from '../services/jwtService';
 import { emailQueue } from '../jobs/queue';
 import { logger } from '../config/logger';
 import { cacheService, CACHE_KEYS, CACHE_CONFIG } from '../config/cache';
-import { adminLoginSchema, updateAppointmentSchema, dashboardQuerySchema } from '../utils/validationSchemas';
+import { adminLoginSchema, updateAppointmentSchema, dashboardQuerySchema, forgotPasswordSchema } from '../utils/validationSchemas';
 
 export class AdminController {
   private adminModel: AdminModel;
@@ -59,13 +59,20 @@ export class AdminController {
         role: admin.role
       });
 
+      // Set cookie with the token
+      res.cookie('admin_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+      });
+
       logger.info(`Admin login successful: ${admin.id} - ${admin.email}`);
 
       res.status(200).json({
         success: true,
         message: 'Login successful',
         data: {
-          token,
           admin: {
             id: admin.id,
             name: admin.name,
@@ -374,6 +381,63 @@ export class AdminController {
 
     } catch (error) {
       logger.error('Error cancelling appointment:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  async forgotPassword(req: Request, res: Response): Promise<void> {
+    try {
+      // Validate input
+      const { error, value } = forgotPasswordSchema.validate(req.body);
+      if (error) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: error.details.map(detail => detail.message)
+        });
+        return;
+      }
+
+      const { email } = value;
+
+      // Find admin by email
+      const admin = await this.adminModel.findByEmail(email);
+      if (!admin) {
+        // For security reasons, we don't reveal whether the email exists or not
+        // Always return success to prevent email enumeration
+        res.status(200).json({
+          success: true,
+          message: 'If an account with that email exists, a password reset link has been sent.'
+        });
+        return;
+      }
+
+      // Generate a password reset token
+      const resetToken = jwtService.generateResetToken({
+        id: admin.id,
+        email: admin.email
+      });
+
+      // Send password reset email
+      await emailQueue.add('send email', {
+        to: admin.email,
+        subject: 'Password Reset Request',
+        text: `Hello ${admin.name},\n\nYou requested a password reset for your admin account.\n\nPlease click the link below to reset your password:\n\n${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}\n\nThis link will expire in 1 hour.\n\nIf you did not request this reset, please ignore this email.\n\nThank you!`,
+        html: `<p>Hello ${admin.name},</p><p>You requested a password reset for your admin account.</p><p>Please click the link below to reset your password:</p><p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}">Reset Password</a></p><p>This link will expire in 1 hour.</p><p>If you did not request this reset, please ignore this email.</p><p>Thank you!</p>`
+      });
+
+      logger.info(`Password reset requested for admin: ${admin.id} - ${admin.email}`);
+
+      res.status(200).json({
+        success: true,
+        message: 'If an account with that email exists, a password reset link has been sent.'
+      });
+
+    } catch (error) {
+      logger.error('Error in forgot password:', error);
       res.status(500).json({
         success: false,
         message: 'Internal server error'

@@ -81,6 +81,25 @@ export class JWTService {
     
     return Math.max(0, expirationTime - Date.now());
   }
+
+  generateResetToken(payload: { id: number; email: string }): string {
+    const resetTokenSecret = process.env.RESET_TOKEN_SECRET || jwtConfig.secret + '_reset';
+    const resetTokenExpiry = process.env.RESET_TOKEN_EXPIRES_IN || '1h';
+    
+    return jwt.sign(payload, resetTokenSecret, {
+      expiresIn: resetTokenExpiry
+    } as jwt.SignOptions);
+  }
+
+  verifyResetToken(token: string): { id: number; email: string } | null {
+    try {
+      const resetTokenSecret = process.env.RESET_TOKEN_SECRET || jwtConfig.secret + '_reset';
+      const decoded = jwt.verify(token, resetTokenSecret) as { id: number; email: string };
+      return decoded;
+    } catch (error) {
+      return null;
+    }
+  }
 }
 
 export const jwtService = new JWTService();

@@ -29,16 +29,21 @@ CREATE TABLE IF NOT EXISTS appointments (
 CREATE TABLE IF NOT EXISTS admins (
     id SERIAL PRIMARY KEY,
     username VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    name VARCHAR(255) DEFAULT 'Admin',
+    role VARCHAR(20) DEFAULT 'admin',
     password_hash VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Create index for better performance
 CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(date);
 CREATE INDEX IF NOT EXISTS idx_appointments_client_id ON appointments(client_id);
 CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
+CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email);
 
--- Insert default admin user (username: admin, password: admin123)
-INSERT INTO admins (username, password_hash) 
-VALUES ('admin', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi') 
+-- Insert default admin user (username: admin, password: admin123, email: admin@example.com)
+INSERT INTO admins (username, email, name, role, password_hash) 
+VALUES ('admin', 'admin@example.com', 'Admin', 'admin', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi') 
 ON CONFLICT (username) DO NOTHING;

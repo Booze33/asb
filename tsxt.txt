@@ -1,17 +1,53 @@
 services:
   redis:
     image: redis:7-alpine
-    container_name: clinic-redis
+    container_name: salon_redis
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+      --appendfsync everysec
+    networks:
+      - salon_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: salon_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-salon_appointment_db}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./server/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - salon_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-salon_appointment_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   app:
-    build: .
-    container_name: clinic-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: salon_app
     ports:
       - "3008:3008"
     env_file:
@@ -20,41 +56,17 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    networks:
+      - salon_network
     restart: unless-stopped
-    volumes:
-      - ./logs:/app/logs
-
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    container_name: clinic-redis-commander
-    environment:
-      - REDIS_HOSTS=local:redis:6379
-    ports:
-      - "8081:8081"
-    depends_on:
-      - redis
-    restart: unless-stopped
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: clinic-db-postgres
-    environment:
-      POSTGRES_DB: clinic
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d clinic"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
 
 volumes:
-  redis_data:
   postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  salon_network:
+    driver: bridge

@@ -5,35 +5,14 @@ import { NotificationService } from '../services/notificationService';
 import { logger } from '../config/logger';
 
 // Create a new Bull queue for emails
-const emailQueue = new Queue('email queue', process.env.REDIS_URL || 'redis://localhost:6379');
+const emailQueue = new Queue('email queue', process.env.REDIS_URL || 'redis://default:your_strong_redis_password_here@redis:6379');
 
 // Create a new Bull queue for WhatsApp
-const whatsappQueue = new Queue('whatsapp queue', process.env.REDIS_URL || 'redis://localhost:6379');
+const whatsappQueue = new Queue('whatsapp queue', process.env.REDIS_URL || 'redis://default:your_strong_redis_password_here@redis:6379');
 
 // Create a unified notification queue
-const notificationQueue = new Queue('notification queue', process.env.REDIS_URL || 'redis://localhost:6379');
+const notificationQueue = new Queue('notification queue', process.env.REDIS_URL || 'redis://default:your_strong_redis_password_here@redis:6379');
 
-// Process email jobs (legacy support)
-emailQueue.process('send email', async (job) => {
-  const { to, subject, text, html } = job.data;
-  
-  // Import the email service
-  const { sendEmail } = await import('../services/emailService');
-  
-  const result = await sendEmail(to, subject, text, html);
-  return result;
-});
-
-// Process WhatsApp jobs (legacy support)
-whatsappQueue.process('send whatsapp', async (job) => {
-  const { to, body } = job.data;
-  
-  // Import the WhatsApp service
-  const { sendWhatsAppMessage } = await import('../services/whatsappService');
-  
-  const result = await sendWhatsAppMessage(to, body);
-  return result;
-});
 
 // Process notification jobs (new unified system)
 notificationQueue.process('send notification', async (job) => {

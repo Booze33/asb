@@ -7,7 +7,7 @@ import pool from '../config/database';
 interface Appointment {
   id: number;
   client_id: number;
-  date_time: Date;
+  date: Date;
   duration: number;
   status: string;
   reminder_sent_at: Date | null;
@@ -76,9 +76,9 @@ export class ReminderScheduler {
       FROM appointments a
       JOIN clients c ON a.client_id = c.id
       WHERE a.status = 'booked' 
-        AND a.date_time BETWEEN $1 AND $2
+        AND a.date BETWEEN $1 AND $2
         AND (a.reminder_sent_at IS NULL OR a.reminder_sent_at < $3)
-      ORDER BY a.date_time
+      ORDER BY a.date
     `;
 
     const result = await this.db.query(query, [now, oneHourFromNow, new Date(now.getTime() - 24 * 60 * 60 * 1000)]);
@@ -99,7 +99,7 @@ export class ReminderScheduler {
   }
 
   private async scheduleReminderJobsForAppointment(appointment: Appointment): Promise<void> {
-    const appointmentTime = new Date(appointment.date_time);
+    const appointmentTime = new Date(appointment.date);
     
     // Schedule 1-hour reminder
     const oneHourBefore = new Date(appointmentTime.getTime() - 60 * 60 * 1000);
@@ -121,7 +121,7 @@ export class ReminderScheduler {
       clientName: appointment.client_name,
       clientEmail: appointment.client_email,
       clientPhone: appointment.client_phone,
-      appointmentTime: appointment.date_time,
+      appointmentTime: appointment.date,
       duration: appointment.duration,
       type: type
     };

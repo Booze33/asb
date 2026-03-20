@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { pool } from '../config/database';
+import pool from '../config/database';
 import { logger } from '../config/logger';
 
 const router = Router();

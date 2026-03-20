@@ -1,4 +1,5 @@
 import winston from 'winston';
+import DailyRotateFile from 'winston-daily-rotate-file';
 import path from 'path';
 
 // Define log levels
@@ -59,7 +60,7 @@ const transports = [
   }),
   
   // Daily rotate file transport for production
-  new winston.transports.File({
+  new DailyRotateFile({
     filename: path.join(process.cwd(), 'logs', 'application-%DATE%.log'),
     format: winston.format.combine(
       winston.format.timestamp(),

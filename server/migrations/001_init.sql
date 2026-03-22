@@ -45,5 +45,5 @@ CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email);
 
 -- Insert default admin user (username: admin, password: admin123, email: admin@example.com)
 INSERT INTO admins (username, email, name, role, password_hash) 
-VALUES ('admin', 'admin@example.com', 'Admin', 'admin', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi') 
+VALUES ('admin', 'admin@example.com', 'Admin', 'admin', '$2b$10$iIItzgbc71wx2lTzG6pjmuEX0i.DyUrN.UOUsqOPZXx2mOMjMRP3S') 
 ON CONFLICT (username) DO NOTHING;

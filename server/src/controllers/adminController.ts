@@ -32,9 +32,6 @@ export class AdminController {
 
       const { email, password } = value;
 
-      console.log('Admin login attempt with email:', email);
-      console.log('Admin login attempt with password:', password);
-
       // Find admin by email
       const admin = await this.adminModel.findByEmail(email);
       if (!admin) {

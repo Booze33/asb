@@ -39,6 +39,7 @@ export class AdminModel {
   }
 
   async verifyPassword(password: string, hash: string): Promise<boolean> {
-    return bcrypt.compare(password, hash);
+    const isMatch = await bcrypt.compare(password, hash);
+    return isMatch;
   }
 }

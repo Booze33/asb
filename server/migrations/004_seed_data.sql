@@ -35,8 +35,8 @@ UPDATE appointments SET reminder_sent_at = date - INTERVAL '1 hour' WHERE status
 
 -- Insert additional admin users
 INSERT INTO admins (username, email, name, role, password_hash) VALUES
-('manager', 'manager@example.com', 'Store Manager', 'manager', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'),
-('receptionist', 'receptionist@example.com', 'Front Desk', 'staff', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi')
+('manager', 'manager@example.com', 'Store Manager', 'manager', '$2b$10$iIItzgbc71wx2lTzG6pjmuEX0i.DyUrN.UOUsqOPZXx2mOMjMRP3S'),
+('receptionist', 'receptionist@example.com', 'Front Desk', 'staff', '$2b$10$iIItzgbc71wx2lTzG6pjmuEX0i.DyUrN.UOUsqOPZXx2mOMjMRP3S')
 ON CONFLICT DO NOTHING;
 
 -- Notification logs: confirmation (completed appointments)

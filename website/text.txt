@@ -1,0 +1,191 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 33% 97%;
+    --foreground: 240 25% 14%;
+
+    --card: 40 20% 95%;
+    --card-foreground: 240 25% 14%;
+
+    --popover: 40 33% 97%;
+    --popover-foreground: 240 25% 14%;
+
+    --primary: 183 76% 22%;
+    --primary-foreground: 40 33% 97%;
+
+    --secondary: 35 50% 62%;
+    --secondary-foreground: 240 25% 14%;
+
+    --muted: 40 15% 92%;
+    --muted-foreground: 240 10% 42%;
+
+    --accent: 35 50% 62%;
+    --accent-foreground: 240 25% 14%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 40 33% 97%;
+
+    --border: 40 15% 88%;
+    --input: 40 15% 88%;
+    --ring: 183 76% 22%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 40 20% 95%;
+    --sidebar-foreground: 240 25% 14%;
+    --sidebar-primary: 183 76% 22%;
+    --sidebar-primary-foreground: 40 33% 97%;
+    --sidebar-accent: 35 50% 62%;
+    --sidebar-accent-foreground: 240 25% 14%;
+    --sidebar-border: 40 15% 88%;
+    --sidebar-ring: 183 76% 22%;
+
+    /* Custom tokens */
+    --cream: 40 33% 97%;
+    --cream-dark: 40 20% 93%;
+    --teal: 183 76% 22%;
+    --teal-light: 183 60% 35%;
+    --gold: 35 50% 62%;
+    --gold-light: 35 45% 78%;
+    --navy: 240 25% 14%;
+  }
+
+  .dark {
+    --background: 240 25% 8%;
+    --foreground: 40 33% 97%;
+    --card: 240 25% 12%;
+    --card-foreground: 40 33% 97%;
+    --popover: 240 25% 12%;
+    --popover-foreground: 40 33% 97%;
+    --primary: 183 60% 35%;
+    --primary-foreground: 40 33% 97%;
+    --secondary: 35 50% 62%;
+    --secondary-foreground: 40 33% 97%;
+    --muted: 240 20% 18%;
+    --muted-foreground: 40 15% 65%;
+    --accent: 35 50% 62%;
+    --accent-foreground: 40 33% 97%;
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 40 33% 97%;
+    --border: 240 20% 18%;
+    --input: 240 20% 18%;
+    --ring: 183 60% 35%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'DM Sans', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', serif;
+  }
+}
+
+@layer components {
+  .section-divider {
+    clip-path: polygon(0 0, 100% 4%, 100% 100%, 0 96%);
+  }
+
+  .section-divider-reverse {
+    clip-path: polygon(0 4%, 100% 0, 100% 96%, 0 100%);
+  }
+}
+
+@layer utilities {
+  .hover-lift {
+    @apply transition-transform duration-300;
+  }
+  .hover-lift:hover {
+    transform: translateY(-3px);
+  }
+
+  .text-fluid-xs {
+    font-size: clamp(0.75rem, 1.5vw, 0.875rem);
+  }
+  .text-fluid-sm {
+    font-size: clamp(0.875rem, 2vw, 1rem);
+  }
+  .text-fluid-base {
+    font-size: clamp(1rem, 2.5vw, 1.125rem);
+  }
+  .text-fluid-lg {
+    font-size: clamp(1.125rem, 3vw, 1.5rem);
+  }
+  .text-fluid-xl {
+    font-size: clamp(1.5rem, 4vw, 2rem);
+  }
+  .text-fluid-2xl {
+    font-size: clamp(1.75rem, 5vw, 2.5rem);
+  }
+  .text-fluid-3xl {
+    font-size: clamp(2rem, 6vw, 3.5rem);
+  }
+  .text-fluid-hero {
+    font-size: clamp(2.25rem, 7vw, 4rem);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}

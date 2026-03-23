@@ -1,6 +1,6 @@
 const express = require('express');
 const cookieParser = require('cookie-parser');
-const { authenticateAdmin } = require('./server/src/middleware/auth');
+const { authenticateAdmin } = require('./src/middleware/auth');
 
 // Create a test app
 const app = express();

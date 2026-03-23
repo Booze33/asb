@@ -156,8 +156,34 @@ export class AdminController {
       query += ` ORDER BY a.date_time ASC`;
 
       // Get total count for pagination
-      const countQuery = `SELECT COUNT(*) FROM (${query.replace('*', 'COUNT(*) OVER()').replace('ORDER BY a.date_time ASC', '')}) as count_query`;
-      const countResult = await this.adminModel.db.query(countQuery, values);
+      let countQuery = `
+        SELECT COUNT(*) 
+        FROM appointments a
+        JOIN clients c ON a.client_id = c.id
+        WHERE 1=1
+      `;
+      const countValues: any[] = [];
+      let countParamCount = 0;
+
+      if (status) {
+        countParamCount++;
+        countQuery += ` AND a.status = $${countParamCount}`;
+        countValues.push(status);
+      }
+
+      if (start_date) {
+        countParamCount++;
+        countQuery += ` AND a.date_time >= $${countParamCount}`;
+        countValues.push(start_date);
+      }
+
+      if (end_date) {
+        countParamCount++;
+        countQuery += ` AND a.date_time <= $${countParamCount}`;
+        countValues.push(end_date);
+      }
+
+      const countResult = await this.adminModel.db.query(countQuery, countValues);
       const total = parseInt(countResult.rows[0].count, 10);
 
       // Add pagination

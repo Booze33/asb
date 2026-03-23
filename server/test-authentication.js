@@ -17,7 +17,7 @@ console.log('Generated test token:', token);
 console.log('Test payload:', testPayload);
 
 // Test the JWT service
-const { jwtService } = require('./server/src/services/jwtService');
+const { jwtService } = require('./src/services/jwtService');
 
 // Test token verification
 try {

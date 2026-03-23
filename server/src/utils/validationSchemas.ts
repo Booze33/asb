@@ -28,6 +28,9 @@ export const createAppointmentSchema = Joi.object({
     'number.min': 'Duration must be at least 15 minutes',
     'number.max': 'Duration cannot exceed 240 minutes',
   }),
+  service: Joi.string().max(255).optional().messages({
+    'string.max': 'Service description cannot exceed 255 characters',
+  }),
 });
 
 export const clientSchema = Joi.object({

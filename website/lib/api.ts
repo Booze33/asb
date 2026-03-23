@@ -9,6 +9,7 @@ export interface AppointmentData {
   address: string;
   date_time: string;
   duration: string;
+  service: string;
 }
 
 export interface ApiResponse {

@@ -1,12 +1,12 @@
 -- Seed data for Salon Appointment System
 
--- Insert sample clients
-INSERT INTO clients (name, email, phone, password_hash) VALUES
-('John Doe', 'john.doe@example.com', '+1234567890', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'),
-('Jane Smith', 'jane.smith@example.com', '+1234567891', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'),
-('Bob Johnson', 'bob.johnson@example.com', '+1234567892', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'),
-('Alice Brown', 'alice.brown@example.com', '+1234567893', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'),
-('Charlie Wilson', 'charlie.wilson@example.com', '+1234567894', '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi')
+-- Insert sample clients (address will be set by migration 009)
+INSERT INTO clients (name, email, phone) VALUES
+('John Doe', 'john.doe@example.com', '+1234567890'),
+('Jane Smith', 'jane.smith@example.com', '+1234567891'),
+('Bob Johnson', 'bob.johnson@example.com', '+1234567892'),
+('Alice Brown', 'alice.brown@example.com', '+1234567893'),
+('Charlie Wilson', 'charlie.wilson@example.com', '+1234567894')
 ON CONFLICT (email) DO NOTHING;
 
 -- Insert sample appointments

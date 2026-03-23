@@ -3,6 +3,7 @@ import { PoolClient } from 'pg';
 export interface Appointment {
   id: number;
   client_id: number;
+  service: string;
   date_time: Date;
   duration: number;
   status: 'booked' | 'confirmed' | 'cancelled' | 'completed' | 'missed';
@@ -19,11 +20,11 @@ export class AppointmentModel {
 
   async create(appointmentData: Omit<Appointment, 'id' | 'created_at' | 'updated_at'>): Promise<Appointment> {
     const query = `
-      INSERT INTO appointments (client_id, date_time, duration, status)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO appointments (client_id, service, date_time, duration, status)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING *
     `;
-    const values = [appointmentData.client_id, appointmentData.date_time, appointmentData.duration, appointmentData.status];
+    const values = [appointmentData.client_id, appointmentData.service || 'General Appointment', appointmentData.date_time, appointmentData.duration, appointmentData.status];
     const result = await this.db.query(query, values);
     return result.rows[0];
   }

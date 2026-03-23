@@ -41,6 +41,7 @@ const Contact = () => {
       address: formData.get('address') as string,
       date_time: formData.get('date_time') as string,
       duration: duration.toString(), // Keep as string for API call, backend will validate as number
+      service: formData.get('service') as string || 'General Appointment',
     };
 
     // Validate form data

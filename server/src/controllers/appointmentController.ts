@@ -30,7 +30,7 @@ export class AppointmentController {
         return;
       }
 
-      const { name, email, phone, address, date_time, duration } = value;
+      const { name, email, phone, address, date_time, duration, service } = value;
 
       // Check for double booking
       const existingAppointment = await this.appointmentModel.findByDateTime(new Date(date_time));
@@ -102,6 +102,7 @@ export class AppointmentController {
       // Create appointment
       const appointment = await this.appointmentModel.create({
         client_id: client.id,
+        service: service || 'General Appointment',
         date_time: new Date(date_time),
         duration,
         status: 'booked'

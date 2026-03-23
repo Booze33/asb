@@ -1,5 +1,6 @@
 import express from 'express';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { logger, httpLogger } from './config/logger';
 import pool from './config/database';
 import healthRoutes from './routes/health';
@@ -32,6 +33,9 @@ app.use(httpLogger);
 // Body parsing middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Cookie parsing middleware
+app.use(cookieParser());
 
 // Health check route
 app.use('/health', healthRoutes);

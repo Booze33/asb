@@ -21,6 +21,7 @@ export class AdminController {
     try {
       // Validate input
       const { error, value } = adminLoginSchema.validate(req.body);
+
       if (error) {
         res.status(400).json({
           success: false,
@@ -63,8 +64,9 @@ export class AdminController {
       res.cookie('admin_token', token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        path: '/' // Make cookie available for all paths
       });
 
       logger.info(`Admin login successful: ${admin.id} - ${admin.email}`);
@@ -95,6 +97,8 @@ export class AdminController {
     try {
       // Validate query parameters
       const { error, value } = dashboardQuerySchema.validate(req.query);
+      console.log('====================Dashboard query parameters:', req.query);
+      console.log('================Validation result:', { error, value });
       if (error) {
         res.status(400).json({
           success: false,

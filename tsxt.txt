@@ -1,72 +1,21 @@
-services:
-  redis:
-    image: redis:7-alpine
-    container_name: salon_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    command: >
-      redis-server
-      --appendonly yes
-      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
-      --appendfsync everysec
-    networks:
-      - salon_network
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: salon_postgres
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-salon_appointment_db}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./server/migrations:/docker-entrypoint-initdb.d:ro
-    ports:
-      - "5432:5432"
-    networks:
-      - salon_network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-salon_appointment_db}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: salon_app
-    ports:
-      - "3008:3008"
-    env_file:
-      - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - salon_network
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
-
-networks:
-  salon_network:
-    driver: bridge
+const checkAuth = async () => {
+      try {
+        // For cookie-based auth, we need to make a request to verify the session
+        // We'll try to fetch the admin profile to check if we have a valid session
+        const response = await apiService.getAdminProfile();
+        if (response.success) {
+          // If this succeeds, the user is authenticated
+          setIsAuthenticated(true);
+          setAdmin(response.data);
+        } else {
+          setIsAuthenticated(false);
+          setAdmin(null);
+        }
+      } catch (err) {
+        console.error('Auth check failed:', err);
+        setIsAuthenticated(false);
+        setAdmin(null);
+      } finally {
+        setIsLoading(false);
+      }
+    };

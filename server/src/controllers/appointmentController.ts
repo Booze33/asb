@@ -20,6 +20,7 @@ export class AppointmentController {
     try {
       // Validate input
       const { error, value } = createAppointmentSchema.validate(req.body);
+      console.log('Received appointment data error:', error);
       if (error) {
         res.status(400).json({
           success: false,
@@ -45,20 +46,24 @@ export class AppointmentController {
       let client = null;
       
       // Try to get client from cache first
-      if (email) {
-        const cachedClient = await cacheService.get(CACHE_KEYS.CLIENT_BY_EMAIL(email));
-        if (cachedClient) {
-          client = cachedClient;
-          logger.info(`Client found in cache: ${client.id} - ${client.name}`);
+      try {
+        if (email) {
+          const cachedClient = await cacheService.get(CACHE_KEYS.CLIENT_BY_EMAIL(email));
+          if (cachedClient) {
+            client = cachedClient;
+            logger.info(`Client found in cache: ${client.id} - ${client.name}`);
+          }
         }
-      }
 
-      if (!client && phone) {
-        const cachedClient = await cacheService.get(CACHE_KEYS.CLIENT_BY_PHONE(phone));
-        if (cachedClient) {
-          client = cachedClient;
-          logger.info(`Client found in cache: ${client.id} - ${client.name}`);
+        if (!client && phone) {
+          const cachedClient = await cacheService.get(CACHE_KEYS.CLIENT_BY_PHONE(phone));
+          if (cachedClient) {
+            client = cachedClient;
+            logger.info(`Client found in cache: ${client.id} - ${client.name}`);
+          }
         }
+      } catch (cacheError) {
+        logger.warn('Cache lookup failed, proceeding without cache:', cacheError);
       }
 
       if (!client) {
@@ -66,9 +71,13 @@ export class AppointmentController {
         client = await this.clientModel.findByEmailOrPhone(email, phone);
 
         if (client) {
-          // Cache the found client
-          await this.cacheClient(client);
-          logger.info(`Client found in database and cached: ${client.id} - ${client.name}`);
+          // Try to cache the found client
+          try {
+            await this.cacheClient(client);
+            logger.info(`Client found in database and cached: ${client.id} - ${client.name}`);
+          } catch (cacheError) {
+            logger.warn(`Failed to cache client ${client.id}:`, cacheError);
+          }
         }
       }
 
@@ -81,9 +90,13 @@ export class AppointmentController {
           address
         });
         
-        // Cache the new client
-        await this.cacheClient(client);
-        logger.info(`Created new client and cached: ${client.id} - ${client.name}`);
+        // Try to cache the new client
+        try {
+          await this.cacheClient(client);
+          logger.info(`Created new client and cached: ${client.id} - ${client.name}`);
+        } catch (cacheError) {
+          logger.warn(`Failed to cache new client ${client.id}:`, cacheError);
+        }
       }
 
       // Create appointment
@@ -94,21 +107,8 @@ export class AppointmentController {
         status: 'booked'
       });
 
-      // Enqueue confirmation notification using unified notification service
-      await notificationQueue.add('send notification', {
-        appointmentId: appointment.id,
-        clientId: client.id,
-        clientName: client.name,
-        clientEmail: client.email,
-        clientPhone: client.phone,
-        appointmentTime: appointment.date_time,
-        duration: appointment.duration,
-        type: 'confirmation',
-        channel: 'email'
-      });
-
-      // Also send WhatsApp notification if phone number exists
-      if (client.phone) {
+      // Try to enqueue confirmation notification using unified notification service
+      try {
         await notificationQueue.add('send notification', {
           appointmentId: appointment.id,
           clientId: client.id,
@@ -118,8 +118,27 @@ export class AppointmentController {
           appointmentTime: appointment.date_time,
           duration: appointment.duration,
           type: 'confirmation',
-          channel: 'whatsapp'
+          channel: 'email'
         });
+
+        // Also send WhatsApp notification if phone number exists
+        if (client.phone) {
+          await notificationQueue.add('send notification', {
+            appointmentId: appointment.id,
+            clientId: client.id,
+            clientName: client.name,
+            clientEmail: client.email,
+            clientPhone: client.phone,
+            appointmentTime: appointment.date_time,
+            duration: appointment.duration,
+            type: 'confirmation',
+            channel: 'whatsapp'
+          });
+        }
+        logger.info(`Notification jobs enqueued for appointment: ${appointment.id}`);
+      } catch (notificationError) {
+        logger.warn(`Failed to enqueue notification for appointment ${appointment.id}:`, notificationError);
+        // Continue with the appointment creation even if notifications fail
       }
 
       logger.info(`Created appointment: ${appointment.id} for client: ${client.id}`);

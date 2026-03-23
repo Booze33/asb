@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS appointments (
     id SERIAL PRIMARY KEY,
     client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
     service VARCHAR(255) NOT NULL,
-    date TIMESTAMP NOT NULL,
+    date_time TIMESTAMP NOT NULL,
     duration INTEGER NOT NULL,
     status VARCHAR(50) DEFAULT 'pending',
     notes TEXT,
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS admins (
 );
 
 -- Create index for better performance
-CREATE INDEX IF NOT EXISTS idx_appointments_date ON appointments(date);
+CREATE INDEX IF NOT EXISTS idx_appointments_date_time ON appointments(date_time);
 CREATE INDEX IF NOT EXISTS idx_appointments_client_id ON appointments(client_id);
 CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
 CREATE INDEX IF NOT EXISTS idx_admins_email ON admins(email);

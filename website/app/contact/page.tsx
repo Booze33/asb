@@ -29,13 +29,18 @@ const Contact = () => {
     
     // Get form data
     const formData = new FormData(e.target as HTMLFormElement);
+    
+    // Extract and convert duration to number
+    const durationValue = formData.get('duration');
+    const duration = durationValue ? parseInt(durationValue.toString(), 10) : 0;
+    
     const appointmentData: AppointmentData = {
       name: formData.get('name') as string,
       email: formData.get('email') as string,
       phone: formData.get('phone') as string,
       address: formData.get('address') as string,
       date_time: formData.get('date_time') as string,
-      duration: formData.get('duration') as string,
+      duration: duration.toString(), // Keep as string for API call, backend will validate as number
     };
 
     // Validate form data

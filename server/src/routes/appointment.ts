@@ -9,21 +9,12 @@ import pool from '../config/database';
 
 const router = Router();
 
-// Create appointment controller with database connection
-let appointmentController: AppointmentController;
-
-async function getAppointmentController(): Promise<AppointmentController> {
-  if (!appointmentController) {
-    const client = await pool.connect();
-    appointmentController = new AppointmentController(client);
-  }
-  return appointmentController;
-}
-
 // POST /api/appointments - Create a new appointment
 router.post('/api/appointments', async (req, res) => {
+  let client: PoolClient | null = null;
   try {
-    const controller = await getAppointmentController();
+    client = await pool.connect();
+    const controller = new AppointmentController(client);
     await controller.createAppointment(req, res);
   } catch (error) {
     logger.error('Error in createAppointment route:', error);
@@ -31,13 +22,19 @@ router.post('/api/appointments', async (req, res) => {
       success: false,
       message: 'Internal server error'
     });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 
 // GET /api/appointments/:id - Retrieve appointment details
 router.get('/api/appointments/:id', async (req, res) => {
+  let client: PoolClient | null = null;
   try {
-    const controller = await getAppointmentController();
+    client = await pool.connect();
+    const controller = new AppointmentController(client);
     await controller.getAppointment(req, res);
   } catch (error) {
     logger.error('Error in getAppointment route:', error);
@@ -45,6 +42,10 @@ router.get('/api/appointments/:id', async (req, res) => {
       success: false,
       message: 'Internal server error'
     });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 });
 

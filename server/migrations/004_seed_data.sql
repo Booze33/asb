@@ -10,7 +10,7 @@ INSERT INTO clients (name, email, phone, password_hash) VALUES
 ON CONFLICT (email) DO NOTHING;
 
 -- Insert sample appointments
-INSERT INTO appointments (client_id, service, date, duration, status, notes) VALUES
+INSERT INTO appointments (client_id, service, date_time, duration, status, notes) VALUES
 ((SELECT id FROM clients WHERE email = 'john.doe@example.com'), 'Haircut', CURRENT_DATE + INTERVAL '1 day' + INTERVAL '9 hours', 60, 'booked', 'First time client'),
 ((SELECT id FROM clients WHERE email = 'jane.smith@example.com'), 'Hair Color', CURRENT_DATE + INTERVAL '1 day' + INTERVAL '10 hours' + INTERVAL '30 minutes', 120, 'booked', 'Full color treatment'),
 ((SELECT id FROM clients WHERE email = 'bob.johnson@example.com'), 'Haircut', CURRENT_DATE + INTERVAL '1 day' + INTERVAL '14 hours', 45, 'booked', 'Regular haircut'),
@@ -31,7 +31,7 @@ ON CONFLICT DO NOTHING;
 -- Update timestamps
 UPDATE clients SET updated_at = CURRENT_TIMESTAMP - INTERVAL '1 day' WHERE email IN ('john.doe@example.com', 'jane.smith@example.com');
 UPDATE appointments SET updated_at = CURRENT_TIMESTAMP - INTERVAL '1 day' WHERE status IN ('completed', 'cancelled', 'missed');
-UPDATE appointments SET reminder_sent_at = date - INTERVAL '1 hour' WHERE status = 'completed';
+UPDATE appointments SET reminder_sent_at = date_time - INTERVAL '1 hour' WHERE status = 'completed';
 
 -- Insert additional admin users
 INSERT INTO admins (username, email, name, role, password_hash) VALUES
@@ -67,7 +67,7 @@ SELECT * FROM (
         'reminder'::VARCHAR,
         'success'::VARCHAR,
         'appointment_reminder'::VARCHAR,
-        a.date - INTERVAL '1 hour'
+        a.date_time - INTERVAL '1 hour'
     FROM appointments a
     WHERE a.status = 'completed'
     LIMIT 3
@@ -106,7 +106,7 @@ WHERE id IN (
 );
 
 -- Weekend appointments
-INSERT INTO appointments (client_id, service, date, duration, status, notes) VALUES
+INSERT INTO appointments (client_id, service, date_time, duration, status, notes) VALUES
 ((SELECT id FROM clients WHERE email = 'bob.johnson@example.com'), 'Haircut', CURRENT_DATE + INTERVAL '10 days' + INTERVAL '10 hours', 60, 'pending', 'Weekend appointment'),
 ((SELECT id FROM clients WHERE email = 'alice.brown@example.com'), 'Hair Color', CURRENT_DATE + INTERVAL '11 days' + INTERVAL '14 hours', 180, 'pending', 'Weekend full color')
 ON CONFLICT DO NOTHING;

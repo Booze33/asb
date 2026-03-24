@@ -2,7 +2,7 @@ import app from './app';
 import { logger } from './config/logger';
 import pool from './config/database';
 import { emailQueue, whatsappQueue } from './jobs/queue';
-import { reminderScheduler } from './jobs/reminderScheduler';
+import { ReminderScheduler, reminderScheduler } from './jobs/reminderScheduler';
 import { queueMonitoring } from './jobs/monitoring';
 
 const PORT = process.env.PORT || 3000;
@@ -35,6 +35,8 @@ async function startServer() {
     });
 
     logger.info('Background job processors started successfully');
+
+    const scheduler = await ReminderScheduler.create();
 
     // Start the server
     const server = app.listen(PORT, () => {

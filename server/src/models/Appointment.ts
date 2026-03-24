@@ -9,10 +9,14 @@ export interface Appointment {
   status: 'booked' | 'confirmed' | 'cancelled' | 'completed' | 'missed';
   created_at: Date;
   updated_at: Date;
-  name?: string;
-  email?: string;
-  phone?: string;
-  address?: string;
+  reminder_scheduled_at?: Date | null;
+}
+
+export interface AppointmentWithClient extends Appointment {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
 }
 
 export class AppointmentModel {
@@ -29,7 +33,7 @@ export class AppointmentModel {
     return result.rows[0];
   }
 
-  async findById(id: number): Promise<Appointment | null> {
+  async findById(id: number): Promise<AppointmentWithClient | null> {
     const query = `
       SELECT a.*, c.name, c.email, c.phone, c.address
       FROM appointments a
@@ -49,12 +53,17 @@ export class AppointmentModel {
     return result.rows[0] || null;
   }
 
-  async findByDateTime(dateTime: Date): Promise<Appointment | null> {
-    const query = `
+  async findByDateTime(dateTime: Date, duration?: number): Promise<Appointment | null> {
+    let query = `
       SELECT * FROM appointments 
-      WHERE date_time = $1
+      WHERE status NOT IN ('cancelled', 'missed')
+        AND date_time < $1 + ($2 || ' minutes')::interval
+        AND date_time + (duration || ' minutes')::interval > $1
+      LIMIT 1
     `;
-    const result = await this.db.query(query, [dateTime]);
+    
+    const values = [dateTime, duration || 60]; // Default duration of 60 minutes if not provided
+    const result = await this.db.query(query, values);
     return result.rows[0] || null;
   }
 }

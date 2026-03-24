@@ -10,7 +10,7 @@ import pool from '../config/database';
 const router = Router();
 
 // POST /api/appointments - Create a new appointment
-router.post('/api/appointments', async (req, res) => {
+router.post('/', async (req, res) => {
   let client: PoolClient | null = null;
   try {
     client = await pool.connect();
@@ -30,7 +30,7 @@ router.post('/api/appointments', async (req, res) => {
 });
 
 // GET /api/appointments/:id - Retrieve appointment details
-router.get('/api/appointments/:id', async (req, res) => {
+router.get('/:id', async (req, res) => {
   let client: PoolClient | null = null;
   try {
     client = await pool.connect();

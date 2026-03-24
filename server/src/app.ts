@@ -10,55 +10,35 @@ import cacheRoutes from './routes/cache';
 import { queueMonitoring } from './jobs/monitoring';
 import { requestIdMiddleware } from './middleware/requestId';
 import { corsMiddleware, corsErrorHandler } from './middleware/cors';
-import { publicRateLimit, adminRateLimit, authRateLimit, cacheRateLimit } from './middleware/rateLimit';
-import { validateInput } from './middleware/validation';
+import { publicRateLimit, adminRateLimit, cacheRateLimit } from './middleware/rateLimit';
 
 const app = express();
 
-// Request ID middleware (first for tracing)
 app.use(requestIdMiddleware);
 
-// Security middleware
 app.use(helmet());
 
-// CORS middleware
 app.use(corsMiddleware);
 
-// Rate limiting for public endpoints
-app.use(publicRateLimit);
-
-// Logging middleware
 app.use(httpLogger);
 
-// Body parsing middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Cookie parsing middleware
 app.use(cookieParser());
 
-// Health check route
-app.use('/health', healthRoutes);
 
-// Appointment routes
-app.use('/', appointmentRoutes);
-
-// Admin routes
-app.use('/', adminRoutes);
-
-// Cache routes
-app.use('/api/cache', cacheRoutes);
-
-// Queue monitoring (Bull Board)
+app.use('/health', publicRateLimit, healthRoutes);
+app.use('/api/appointments', publicRateLimit, appointmentRoutes);
+app.use('/api/admin', adminRateLimit, adminRoutes);
+app.use('/api/cache', cacheRateLimit, cacheRoutes);
 app.use('/bull-board', queueMonitoring.getRouter());
 
-// Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   logger.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });

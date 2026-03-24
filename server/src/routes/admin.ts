@@ -5,26 +5,16 @@ import pool from '../config/database';
 import { authenticateAdmin, requireAdminRole, AuthenticatedRequest } from '../middleware/auth';
 import { logger } from '../config/logger';
 import { validateInput } from '../middleware/validation';
-import { authRateLimit, adminRateLimit } from '../middleware/rateLimit';
+import { authRateLimit } from '../middleware/rateLimit';
 import { adminLoginSchema, dashboardQuerySchema, updateAppointmentSchema, forgotPasswordSchema } from '../utils/validationSchemas';
 
 const router = Router();
 
-// Create admin controller with database connection
-let adminController: AdminController;
-
-async function getAdminController(): Promise<AdminController> {
-  if (!adminController) {
-    const client = await pool.connect();
-    adminController = new AdminController(client);
-  }
-  return adminController;
-}
-
-// POST /api/admin/login - Admin login
-router.post('/api/admin/login', async (req, res) => {
+router.post('/login', authRateLimit, async (req, res) => {
+  let client;
   try {
-    const controller = await getAdminController();
+    client = await pool.connect();
+    const controller = new AdminController(client);
     await controller.login(req, res);
   } catch (error) {
     logger.error('Error in admin login route:', error);
@@ -32,13 +22,16 @@ router.post('/api/admin/login', async (req, res) => {
       success: false,
       message: 'Internal server error'
     });
+  } finally {
+    if (client) client.release();
   }
 });
 
-// GET /api/admin/dashboard - Admin dashboard with upcoming appointments
-router.get('/api/admin/dashboard', authenticateAdmin, requireAdminRole, async (req, res) => {
+router.get('/dashboard', authenticateAdmin, requireAdminRole, async (req, res) => {
+  let client;
   try {
-    const controller = await getAdminController();
+    client = await pool.connect();
+    const controller = new AdminController(client);
     await controller.getDashboard(req, res);
   } catch (error) {
     logger.error('Error in admin dashboard route:', error);
@@ -46,13 +39,16 @@ router.get('/api/admin/dashboard', authenticateAdmin, requireAdminRole, async (r
       success: false,
       message: 'Internal server error'
     });
+  } finally {
+    if (client) client.release();
   }
 });
 
-// PUT /api/admin/appointments/:id - Update appointment
-router.put('/api/admin/appointments/:id', authenticateAdmin, requireAdminRole, async (req, res) => {
+router.put('/appointments/:id', authenticateAdmin, requireAdminRole, async (req, res) => {
+  let client;
   try {
-    const controller = await getAdminController();
+    client = await pool.connect();
+    const controller = new AdminController(client);
     await controller.updateAppointment(req, res);
   } catch (error) {
     logger.error('Error in update appointment route:', error);
@@ -60,13 +56,16 @@ router.put('/api/admin/appointments/:id', authenticateAdmin, requireAdminRole, a
       success: false,
       message: 'Internal server error'
     });
+  } finally {
+    if (client) client.release();
   }
 });
 
-// DELETE /api/admin/appointments/:id - Cancel appointment
-router.delete('/api/admin/appointments/:id', authenticateAdmin, requireAdminRole, async (req, res) => {
+router.delete('/appointments/:id', authenticateAdmin, requireAdminRole, async (req, res) => {
+  let client;
   try {
-    const controller = await getAdminController();
+    client = await pool.connect();
+    const controller = new AdminController(client);
     await controller.deleteAppointment(req, res);
   } catch (error) {
     logger.error('Error in cancel appointment route:', error);
@@ -74,13 +73,16 @@ router.delete('/api/admin/appointments/:id', authenticateAdmin, requireAdminRole
       success: false,
       message: 'Internal server error'
     });
+  } finally {
+    if (client) client.release();
   }
 });
 
-// POST /api/admin/forgot-password - Forgot password
-router.post('/api/admin/forgot-password', async (req, res) => {
+router.post('/forgot-password', async (req, res) => {
+  let client;
   try {
-    const controller = await getAdminController();
+    client = await pool.connect();
+    const controller = new AdminController(client);
     await controller.forgotPassword(req, res);
   } catch (error) {
     logger.error('Error in forgot password route:', error);
@@ -88,11 +90,12 @@ router.post('/api/admin/forgot-password', async (req, res) => {
       success: false,
       message: 'Internal server error'
     });
+  } finally {
+    if (client) client.release();
   }
 });
 
-// POST /api/admin/logout - Logout
-router.post('/api/admin/logout', authenticateAdmin, async (req: AuthenticatedRequest, res) => {
+router.post('/logout', authenticateAdmin, async (req: AuthenticatedRequest, res) => {
   try {
     // For cookie-based sessions, the server would typically clear the session
     // Since we're using JWT tokens stored in cookies, we can just clear the cookie

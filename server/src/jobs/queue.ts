@@ -1,5 +1,4 @@
 import Queue from 'bull';
-import redisClient from '../config/redis';
 import pool from '../config/database';
 import { NotificationService } from '../services/notificationService';
 import { logger } from '../config/logger';

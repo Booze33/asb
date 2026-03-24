@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { PoolClient } from 'pg';
 import { AdminModel } from '../models/Admin';
-import { AppointmentModel } from '../models/Appointment';
+import { AppointmentModel, AppointmentWithClient } from '../models/Appointment';
 import { jwtService } from '../services/jwtService';
 import { emailQueue } from '../jobs/queue';
 import { logger } from '../config/logger';
@@ -19,7 +19,6 @@ export class AdminController {
 
   async login(req: Request, res: Response): Promise<void> {
     try {
-      // Validate input
       const { error, value } = adminLoginSchema.validate(req.body);
 
       if (error) {
@@ -33,7 +32,6 @@ export class AdminController {
 
       const { email, password } = value;
 
-      // Find admin by email
       const admin = await this.adminModel.findByEmail(email);
       if (!admin) {
         res.status(401).json({
@@ -43,7 +41,6 @@ export class AdminController {
         return;
       }
 
-      // Verify password
       const isValidPassword = await this.adminModel.verifyPassword(password, admin.password_hash);
       if (!isValidPassword) {
         res.status(401).json({
@@ -53,20 +50,18 @@ export class AdminController {
         return;
       }
 
-      // Generate JWT token
       const token = jwtService.generateToken({
         id: admin.id,
         email: admin.email,
         role: admin.role
       });
 
-      // Set cookie with the token
       res.cookie('admin_token', token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
-        maxAge: 24 * 60 * 60 * 1000, // 24 hours
-        path: '/' // Make cookie available for all paths
+        maxAge: 24 * 60 * 60 * 1000,
+        path: '/'
       });
 
       logger.info(`Admin login successful: ${admin.id} - ${admin.email}`);
@@ -95,10 +90,7 @@ export class AdminController {
 
   async getDashboard(req: Request, res: Response): Promise<void> {
     try {
-      // Validate query parameters
       const { error, value } = dashboardQuerySchema.validate(req.query);
-      console.log('====================Dashboard query parameters:', req.query);
-      console.log('================Validation result:', { error, value });
       if (error) {
         res.status(400).json({
           success: false,
@@ -110,10 +102,8 @@ export class AdminController {
 
       const { page, limit, status, start_date, end_date } = value;
 
-      // Build cache key based on query parameters
       const cacheKey = `${CACHE_KEYS.DASHBOARD_UPCOMING}:${page}:${limit}:${status || 'all'}:${start_date || 'all'}:${end_date || 'all'}`;
 
-      // Try to get from cache first
       const cachedData = await cacheService.get(cacheKey);
       if (cachedData) {
         logger.info(`Dashboard data served from cache: ${cacheKey}`);
@@ -125,7 +115,6 @@ export class AdminController {
         return;
       }
 
-      // Build query
       let query = `
         SELECT a.*, c.name, c.email, c.phone, c.address
         FROM appointments a
@@ -155,7 +144,6 @@ export class AdminController {
 
       query += ` ORDER BY a.date_time ASC`;
 
-      // Get total count for pagination
       let countQuery = `
         SELECT COUNT(*) 
         FROM appointments a
@@ -186,7 +174,6 @@ export class AdminController {
       const countResult = await this.adminModel.db.query(countQuery, countValues);
       const total = parseInt(countResult.rows[0].count, 10);
 
-      // Add pagination
       const offset = (page - 1) * limit;
       paramCount++;
       query += ` LIMIT $${paramCount}`;
@@ -199,7 +186,6 @@ export class AdminController {
       const result = await this.adminModel.db.query(query, values);
       const appointments = result.rows;
 
-      // Prepare response data
       const responseData = {
         appointments,
         pagination: {
@@ -210,7 +196,6 @@ export class AdminController {
         }
       };
 
-      // Cache the result
       await cacheService.set(cacheKey, responseData, CACHE_CONFIG.DASHBOARD_TTL);
 
       res.status(200).json({
@@ -230,7 +215,6 @@ export class AdminController {
 
   async updateAppointment(req: Request, res: Response): Promise<void> {
     try {
-      // Get admin from request (assuming auth middleware sets req.user)
       const adminId = (req as any).user?.id || 'unknown';
       const appointmentId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
 
@@ -242,7 +226,6 @@ export class AdminController {
         return;
       }
 
-      // Validate input
       const { error, value } = updateAppointmentSchema.validate(req.body);
       if (error) {
         res.status(400).json({
@@ -253,8 +236,7 @@ export class AdminController {
         return;
       }
 
-      // Get current appointment
-      const currentAppointment = await this.appointmentModel.findById(appointmentId);
+      const currentAppointment = await this.appointmentModel.findById(appointmentId) as AppointmentWithClient;
       if (!currentAppointment) {
         res.status(404).json({
           success: false,
@@ -263,7 +245,6 @@ export class AdminController {
         return;
       }
 
-      // Validate status transitions
       if (value.status) {
         const isValidTransition = this.validateStatusTransition(currentAppointment.status, value.status);
         if (!isValidTransition) {
@@ -276,9 +257,9 @@ export class AdminController {
         }
       }
 
-      // Check for double booking if date_time is being updated
       if (value.date_time) {
-        const existingAppointment = await this.appointmentModel.findByDateTime(new Date(value.date_time));
+        const duration = value.duration || 60; // Default to 60 minutes if not provided
+        const existingAppointment = await this.appointmentModel.findByDateTime(new Date(value.date_time), duration);
         if (existingAppointment && existingAppointment.id !== appointmentId) {
           res.status(409).json({
             success: false,
@@ -288,7 +269,6 @@ export class AdminController {
         }
       }
 
-      // Build update query
       let updateQuery = 'UPDATE appointments SET ';
       const updateValues: any[] = [];
       let paramCount = 0;
@@ -325,19 +305,16 @@ export class AdminController {
       updateValues.push(appointmentId);
 
       const result = await this.adminModel.db.query(updateQuery, updateValues);
-      const updatedAppointment = result.rows[0];
+      const updatedAppointment = result.rows[0] as AppointmentWithClient;
 
-      // Trigger notifications for status changes
       if (value.status) {
         await this.handleStatusChangeNotifications(currentAppointment, updatedAppointment);
       }
 
-      // Handle reminder job management for rescheduling
       if (value.date_time) {
         await this.handleReminderJobManagement(currentAppointment, updatedAppointment);
       }
 
-      // Invalidate dashboard cache since appointment data changed
       await this.invalidateDashboardCache();
 
       logger.info(`Appointment updated: ${updatedAppointment.id} by admin: ${adminId}`);
@@ -361,7 +338,6 @@ export class AdminController {
 
   async deleteAppointment(req: Request, res: Response): Promise<void> {
     try {
-      // Get admin from request (assuming auth middleware sets req.user)
       const adminId = (req as any).user?.id || 'unknown';
       const appointmentId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
 
@@ -373,8 +349,7 @@ export class AdminController {
         return;
       }
 
-      // Get current appointment
-      const currentAppointment = await this.appointmentModel.findById(appointmentId);
+      const currentAppointment = await this.appointmentModel.findById(appointmentId) as AppointmentWithClient;
       if (!currentAppointment) {
         res.status(404).json({
           success: false,
@@ -383,7 +358,6 @@ export class AdminController {
         return;
       }
 
-      // Update status to cancelled instead of deleting
       const updateQuery = `
         UPDATE appointments 
         SET status = 'cancelled' 
@@ -393,10 +367,8 @@ export class AdminController {
       const result = await this.adminModel.db.query(updateQuery, [appointmentId]);
       const cancelledAppointment = result.rows[0];
 
-      // Trigger cancellation notification
       await this.handleStatusChangeNotifications(currentAppointment, cancelledAppointment);
 
-      // Invalidate dashboard cache since appointment data changed
       await this.invalidateDashboardCache();
 
       logger.info(`Appointment cancelled: ${cancelledAppointment.id} by admin: ${adminId}`);
@@ -420,7 +392,6 @@ export class AdminController {
 
   async forgotPassword(req: Request, res: Response): Promise<void> {
     try {
-      // Validate input
       const { error, value } = forgotPasswordSchema.validate(req.body);
       if (error) {
         res.status(400).json({
@@ -433,11 +404,8 @@ export class AdminController {
 
       const { email } = value;
 
-      // Find admin by email
       const admin = await this.adminModel.findByEmail(email);
       if (!admin) {
-        // For security reasons, we don't reveal whether the email exists or not
-        // Always return success to prevent email enumeration
         res.status(200).json({
           success: true,
           message: 'If an account with that email exists, a password reset link has been sent.'
@@ -445,13 +413,11 @@ export class AdminController {
         return;
       }
 
-      // Generate a password reset token
       const resetToken = jwtService.generateResetToken({
         id: admin.id,
         email: admin.email
       });
 
-      // Send password reset email
       await emailQueue.add('send email', {
         to: admin.email,
         subject: 'Password Reset Request',
@@ -530,9 +496,6 @@ export class AdminController {
     }
   }
 
-  /**
-   * Invalidate dashboard cache when appointments are modified
-   */
   private async invalidateDashboardCache(): Promise<void> {
     try {
       // Invalidate all dashboard cache keys

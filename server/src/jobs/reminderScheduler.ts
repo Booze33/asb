@@ -10,7 +10,7 @@ interface Appointment {
   date_time: Date;
   duration: number;
   status: string;
-  reminder_sent_at: Date | null;
+  reminder_scheduled_at: Date | null;
   created_at: Date;
   updated_at: Date;
   client_name: string;
@@ -38,7 +38,6 @@ export class ReminderScheduler {
   }
 
   private scheduleReminderJobs(): void {
-    // Run every minute
     cron.schedule('* * * * *', async () => {
       try {
         logger.info('Running reminder scheduler...');
@@ -52,7 +51,6 @@ export class ReminderScheduler {
   }
 
   private scheduleCleanupJob(): void {
-    // Run daily at 2 AM
     cron.schedule('0 2 * * *', async () => {
       try {
         logger.info('Running daily cleanup job...');
@@ -70,14 +68,13 @@ export class ReminderScheduler {
     const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour
     const thirtyMinutesFromNow = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes
 
-    // Find appointments in the next hour that haven't had reminders sent
     const query = `
       SELECT a.*, c.name as client_name, c.email as client_email, c.phone as client_phone
       FROM appointments a
       JOIN clients c ON a.client_id = c.id
       WHERE a.status = 'booked' 
         AND a.date_time BETWEEN $1 AND $2
-        AND (a.reminder_sent_at IS NULL OR a.reminder_sent_at < $3)
+        AND (a.reminder_scheduled_at IS NULL OR a.reminder_scheduled_at < $3)
       ORDER BY a.date_time
     `;
 
@@ -92,22 +89,19 @@ export class ReminderScheduler {
 
     for (const appointment of result.rows) {
       await this.scheduleReminderJobsForAppointment(appointment);
-      
-      // Mark reminders as scheduled
+
       await this.markRemindersScheduled(appointment.id);
     }
   }
 
   private async scheduleReminderJobsForAppointment(appointment: Appointment): Promise<void> {
     const appointmentTime = new Date(appointment.date_time);
-    
-    // Schedule 1-hour reminder
+
     const oneHourBefore = new Date(appointmentTime.getTime() - 60 * 60 * 1000);
     if (oneHourBefore > new Date()) {
       await this.scheduleReminderJob(appointment, '1-hour', oneHourBefore);
     }
 
-    // Schedule 30-minute reminder
     const thirtyMinutesBefore = new Date(appointmentTime.getTime() - 30 * 60 * 1000);
     if (thirtyMinutesBefore > new Date()) {
       await this.scheduleReminderJob(appointment, '30-minutes', thirtyMinutesBefore);
@@ -126,7 +120,6 @@ export class ReminderScheduler {
       type: type
     };
 
-    // Schedule email reminder
     await emailQueue.add('send reminder', jobData, {
       delay: scheduledTime.getTime() - Date.now(),
       attempts: 3,
@@ -136,7 +129,6 @@ export class ReminderScheduler {
       }
     });
 
-    // Schedule WhatsApp reminder (if phone number exists)
     if (appointment.client_phone) {
       await whatsappQueue.add('send reminder', jobData, {
         delay: scheduledTime.getTime() - Date.now(),
@@ -154,7 +146,7 @@ export class ReminderScheduler {
   private async markRemindersScheduled(appointmentId: number): Promise<void> {
     const updateQuery = `
       UPDATE appointments 
-      SET reminder_sent_at = NOW() 
+      SET reminder_scheduled_at = NOW() 
       WHERE id = $1
     `;
     await this.db.query(updateQuery, [appointmentId]);
@@ -164,19 +156,81 @@ export class ReminderScheduler {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - 14); // 14 days ago
 
-    const query = `
-      DELETE FROM appointments 
-      WHERE status IN ('completed', 'missed', 'cancelled')
-        AND updated_at < $1
-    `;
+    try {
+      // Start a transaction to ensure atomicity
+      await this.db.query('BEGIN');
 
-    const result = await this.db.query(query, [cutoffDate]);
-    
-    if (result.rowCount && result.rowCount > 0) {
-      logger.info(`Cleaned up ${result.rowCount} old appointments`);
-    } else {
-      logger.info('No old appointments found for cleanup');
+      // Step 1: Archive notification logs before deleting appointments
+      const archiveQuery = `
+        INSERT INTO archived_notification_logs (
+          original_id, appointment_id, client_id, channel, notification_type, 
+          status, template_used, error_message, sent_at, created_at, archive_reason
+        )
+        SELECT 
+          id, appointment_id, client_id, channel, notification_type,
+          status, template_used, error_message, sent_at, created_at, 'appointment_cleanup'
+        FROM notification_logs 
+        WHERE appointment_id IN (
+          SELECT id FROM appointments 
+          WHERE status IN ('completed', 'missed', 'cancelled')
+            AND updated_at < $1
+        )
+      `;
+
+      const archiveResult = await this.db.query(archiveQuery, [cutoffDate]);
+      const archivedCount = archiveResult.rowCount || 0;
+
+      if (archivedCount > 0) {
+        logger.info(`Archived ${archivedCount} notification logs before appointment cleanup`);
+      }
+
+      // Step 2: Delete old appointments (notification_logs.appointment_id will be set to NULL due to ON DELETE SET NULL)
+      const deleteQuery = `
+        DELETE FROM appointments 
+        WHERE status IN ('completed', 'missed', 'cancelled')
+          AND updated_at < $1
+      `;
+
+      const deleteResult = await this.db.query(deleteQuery, [cutoffDate]);
+      const deletedCount = deleteResult.rowCount || 0;
+
+      // Step 3: Clean up orphaned notification logs (those with NULL appointment_id that are old)
+      const cleanupOrphansQuery = `
+        DELETE FROM notification_logs 
+        WHERE appointment_id IS NULL 
+          AND created_at < $1
+      `;
+
+      const orphanResult = await this.db.query(cleanupOrphansQuery, [cutoffDate]);
+      const orphanCount = orphanResult.rowCount || 0;
+
+      // Commit the transaction
+      await this.db.query('COMMIT');
+
+      if (deletedCount > 0) {
+        logger.info(`Cleaned up ${deletedCount} old appointments`);
+      } else {
+        logger.info('No old appointments found for cleanup');
+      }
+
+      if (orphanCount > 0) {
+        logger.info(`Cleaned up ${orphanCount} orphaned notification logs`);
+      }
+
+    } catch (error) {
+      // Rollback the transaction if anything fails
+      await this.db.query('ROLLBACK');
+      logger.error('Error in cleanup job - transaction rolled back:', error);
+      throw error;
     }
+  }
+
+  public static async create(): Promise<ReminderScheduler> {
+    const scheduler = new ReminderScheduler();
+    await scheduler.initializeDatabase();
+    scheduler.scheduleReminderJobs();
+    scheduler.scheduleCleanupJob();
+    return scheduler;
   }
 
   public async shutdown(): Promise<void> {
@@ -187,10 +241,8 @@ export class ReminderScheduler {
   }
 }
 
-// Export singleton instance
 export const reminderScheduler = new ReminderScheduler();
 
-// Graceful shutdown
 process.on('SIGTERM', async () => {
   await reminderScheduler.shutdown();
 });

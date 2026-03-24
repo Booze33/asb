@@ -102,7 +102,7 @@ router.post('/logout', authenticateAdmin, async (req: AuthenticatedRequest, res)
     res.clearCookie('admin_token', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict'
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax'
     });
     
     logger.info(`Admin logout: ${req.user?.id} - ${req.user?.email}`);

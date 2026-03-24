@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import pool from '../config/database';
 import { logger } from '../config/logger';
+import { cacheService } from '../config/cache';
 
 const router = Router();
 
@@ -14,9 +15,10 @@ router.get('/', async (req, res) => {
     const dbResult = await pool.query('SELECT 1 as health');
     const dbResponseTime = Date.now() - dbStart;
     
-    // Check Redis connection (placeholder - would need Redis connection)
+    // Check Redis connection using cache service
     const redisStart = Date.now();
-    const redisHealth = true; // Placeholder - would check Redis connection
+    const redisStats = await cacheService.getStats();
+    const redisHealth = redisStats.connected;
     const redisResponseTime = Date.now() - redisStart;
     
     // Check queue status (placeholder - would need queue monitoring)
@@ -86,7 +88,8 @@ router.get('/ready', async (req, res) => {
   try {
     // Check if all critical services are ready
     const dbResult = await pool.query('SELECT 1 as ready');
-    const redisHealth = true; // Placeholder - would check Redis connection
+    const redisStats = await cacheService.getStats();
+    const redisHealth = redisStats.connected;
     
     if (dbResult.rows.length > 0 && redisHealth) {
       res.status(200).json({ 

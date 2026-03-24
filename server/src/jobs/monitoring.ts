@@ -2,7 +2,7 @@ import { Queue } from 'bull';
 import { createBullBoard } from '@bull-board/api';
 import { BullAdapter } from '@bull-board/api/bullAdapter';
 import { ExpressAdapter } from '@bull-board/express';
-import { emailQueue, whatsappQueue } from './queue';
+import { emailQueue, whatsappQueue, notificationQueue } from './queue';
 import { logger } from '../config/logger';
 
 export class QueueMonitoring {
@@ -19,7 +19,8 @@ export class QueueMonitoring {
     const { addQueue, removeQueue, setQueues, replaceQueues } = createBullBoard({
       queues: [
         new BullAdapter(emailQueue),
-        new BullAdapter(whatsappQueue)
+        new BullAdapter(whatsappQueue),
+        new BullAdapter(notificationQueue)
       ],
       serverAdapter: this.serverAdapter,
     });
@@ -33,7 +34,7 @@ export class QueueMonitoring {
   }
 
   public getQueues(): Queue[] {
-    return [emailQueue, whatsappQueue];
+    return [emailQueue, whatsappQueue, notificationQueue];
   }
 }
 

@@ -1,7 +1,7 @@
 -- Create notification_logs table
 CREATE TABLE IF NOT EXISTS notification_logs (
     id SERIAL PRIMARY KEY,
-    appointment_id INTEGER REFERENCES appointments(id) ON DELETE CASCADE,
+    appointment_id INTEGER REFERENCES appointments(id) ON DELETE SET NULL,
     client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
     channel VARCHAR(20) NOT NULL, -- 'email' or 'whatsapp'
     notification_type VARCHAR(20) NOT NULL, -- 'confirmation', 'reminder', 'cancellation', 'completed', 'missed'
@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_notification_logs_status ON notification_logs(sta
 CREATE INDEX IF NOT EXISTS idx_notification_logs_sent_at ON notification_logs(sent_at);
 
 -- Add comments for documentation
-COMMENT ON TABLE notification_logs IS 'Logs all notification attempts and results';
+COMMENT ON TABLE notification_logs IS 'Logs all notification attempts and results (appointment_id set to NULL on appointment deletion)';
 COMMENT ON COLUMN notification_logs.channel IS 'Channel used for notification (email/whatsapp)';
 COMMENT ON COLUMN notification_logs.notification_type IS 'Type of notification sent';
 COMMENT ON COLUMN notification_logs.status IS 'Status of notification attempt';

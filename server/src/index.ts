@@ -2,7 +2,7 @@ import app from './app';
 import { logger } from './config/logger';
 import pool from './config/database';
 import { emailQueue, whatsappQueue } from './jobs/queue';
-import { ReminderScheduler, reminderScheduler } from './jobs/reminderScheduler';
+import { ReminderScheduler } from './jobs/reminderScheduler';
 import { queueMonitoring } from './jobs/monitoring';
 
 const PORT = process.env.PORT || 3000;
@@ -45,27 +45,19 @@ async function startServer() {
     });
 
     // Graceful shutdown
-    process.on('SIGTERM', async () => {
-      logger.info('SIGTERM received, shutting down gracefully');
-      await reminderScheduler.shutdown();
+    const shutdown = async () => {
+      logger.info('Shutting down gracefully');
+      await scheduler.shutdown();
       server.close(() => {
         pool.end(() => {
           logger.info('Process terminated');
           process.exit(0);
         });
       });
-    });
+    };
 
-    process.on('SIGINT', async () => {
-      logger.info('SIGINT received, shutting down gracefully');
-      await reminderScheduler.shutdown();
-      server.close(() => {
-        pool.end(() => {
-          logger.info('Process terminated');
-          process.exit(0);
-        });
-      });
-    });
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
 
   } catch (error) {
     logger.error('Failed to start server:', error);

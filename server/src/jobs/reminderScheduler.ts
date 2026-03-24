@@ -21,10 +21,14 @@ interface Appointment {
 export class ReminderScheduler {
   private db!: PoolClient;
 
-  constructor() {
-    this.initializeDatabase();
-    this.scheduleReminderJobs();
-    this.scheduleCleanupJob();
+  private constructor() {}
+
+  public static async create(): Promise<ReminderScheduler> {
+    const scheduler = new ReminderScheduler();
+    await scheduler.initializeDatabase();
+    scheduler.scheduleReminderJobs();
+    scheduler.scheduleCleanupJob();
+    return scheduler;
   }
 
   private async initializeDatabase(): Promise<void> {
@@ -225,14 +229,6 @@ export class ReminderScheduler {
     }
   }
 
-  public static async create(): Promise<ReminderScheduler> {
-    const scheduler = new ReminderScheduler();
-    await scheduler.initializeDatabase();
-    scheduler.scheduleReminderJobs();
-    scheduler.scheduleCleanupJob();
-    return scheduler;
-  }
-
   public async shutdown(): Promise<void> {
     if (this.db) {
       this.db.release();
@@ -241,12 +237,3 @@ export class ReminderScheduler {
   }
 }
 
-export const reminderScheduler = new ReminderScheduler();
-
-process.on('SIGTERM', async () => {
-  await reminderScheduler.shutdown();
-});
-
-process.on('SIGINT', async () => {
-  await reminderScheduler.shutdown();
-});

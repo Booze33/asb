@@ -30,13 +30,5 @@ COMMENT ON TABLE archived_notification_logs IS 'Archived notification logs for c
 COMMENT ON COLUMN archived_notification_logs.original_id IS 'ID of the original notification_log record';
 COMMENT ON COLUMN archived_notification_logs.archive_reason IS 'Reason for archiving the notification log';
 
--- Update notification_logs table foreign key constraint to prevent cascade deletion
--- First, drop the existing constraint
-ALTER TABLE notification_logs DROP CONSTRAINT IF EXISTS notification_logs_appointment_id_fkey;
-
--- Then, recreate it without CASCADE DELETE
-ALTER TABLE notification_logs ADD CONSTRAINT notification_logs_appointment_id_fkey 
-    FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE SET NULL;
-
--- Update the table comment to reflect the change
-COMMENT ON TABLE notification_logs IS 'Logs all notification attempts and results (appointment_id set to NULL on appointment deletion)';
+-- Note: Foreign key constraint already updated in migration 002 to use ON DELETE SET NULL
+-- This ensures notification logs survive appointment deletion for archival purposes

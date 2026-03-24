@@ -1,8 +1,12 @@
--- Rename reminder_sent_at to reminder_scheduled_at
--- This fixes the semantic issue where the column was being set when jobs were scheduled,
--- not when notifications were actually sent
+-- Migration to ensure reminder_scheduled_at column exists
+-- This handles the case where reminder_sent_at might already be renamed or doesn't exist
 
-ALTER TABLE appointments RENAME COLUMN reminder_sent_at TO reminder_scheduled_at;
+-- Add the reminder_scheduled_at column if it doesn't already exist
+-- This is safer than trying to rename an existing column
+ALTER TABLE IF EXISTS appointments ADD COLUMN IF NOT EXISTS reminder_scheduled_at TIMESTAMP;
 
--- Update the column comment to reflect its new purpose
+-- Add comment to the column
 COMMENT ON COLUMN appointments.reminder_scheduled_at IS 'Timestamp when reminder jobs were scheduled (not when actually sent)';
+
+-- If reminder_sent_at exists, we'll leave it as is for now to avoid breaking anything
+-- The application should use reminder_scheduled_at going forward

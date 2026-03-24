@@ -31,7 +31,17 @@ ON CONFLICT DO NOTHING;
 -- Update timestamps
 UPDATE clients SET updated_at = CURRENT_TIMESTAMP - INTERVAL '1 day' WHERE email IN ('john.doe@example.com', 'jane.smith@example.com');
 UPDATE appointments SET updated_at = CURRENT_TIMESTAMP - INTERVAL '1 day' WHERE status IN ('completed', 'cancelled', 'missed');
-UPDATE appointments SET reminder_sent_at = date_time - INTERVAL '1 hour' WHERE status = 'completed';
+
+-- Update reminder column (handle both old and new column names for compatibility)
+-- Check if reminder_sent_at exists (original name)
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'appointments' AND column_name = 'reminder_sent_at') THEN
+        UPDATE appointments SET reminder_sent_at = date_time - INTERVAL '1 hour' WHERE status = 'completed';
+    ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'appointments' AND column_name = 'reminder_scheduled_at') THEN
+        UPDATE appointments SET reminder_scheduled_at = date_time - INTERVAL '1 hour' WHERE status = 'completed';
+    END IF;
+END $$;
 
 -- Insert additional admin users
 INSERT INTO admins (username, email, name, role, password_hash) VALUES

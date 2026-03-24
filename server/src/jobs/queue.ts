@@ -51,6 +51,17 @@ notificationQueue.process('send notification', async (job) => {
   }
 });
 
+// Process email jobs (for admin operations like password reset, cancellations, etc.)
+emailQueue.process('send email', async (job) => {
+  const { to, subject, text, html } = job.data;
+  
+  // Import the email service
+  const { sendEmail } = await import('../services/emailService');
+  
+  const result = await sendEmail(to, subject, text, html);
+  return result;
+});
+
 // Process reminder jobs (legacy support - will be replaced by notification queue)
 emailQueue.process('send reminder', async (job) => {
   const { appointmentId, clientName, clientEmail, appointmentTime, duration, type } = job.data;

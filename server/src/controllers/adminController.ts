@@ -418,11 +418,17 @@ export class AdminController {
         email: admin.email
       });
 
+      const frontendUrl = process.env.FRONTEND_URL;
+      if (!frontendUrl) {
+        logger.error('FRONTEND_URL environment variable is not set');
+        throw new Error('FRONTEND_URL environment variable is required for password reset functionality');
+      }
+
       await emailQueue.add('send email', {
         to: admin.email,
         subject: 'Password Reset Request',
-        text: `Hello ${admin.name},\n\nYou requested a password reset for your admin account.\n\nPlease click the link below to reset your password:\n\n${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}\n\nThis link will expire in 1 hour.\n\nIf you did not request this reset, please ignore this email.\n\nThank you!`,
-        html: `<p>Hello ${admin.name},</p><p>You requested a password reset for your admin account.</p><p>Please click the link below to reset your password:</p><p><a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}">Reset Password</a></p><p>This link will expire in 1 hour.</p><p>If you did not request this reset, please ignore this email.</p><p>Thank you!</p>`
+        text: `Hello ${admin.name},\n\nYou requested a password reset for your admin account.\n\nPlease click the link below to reset your password:\n\n${frontendUrl}/reset-password?token=${resetToken}\n\nThis link will expire in 1 hour.\n\nIf you did not request this reset, please ignore this email.\n\nThank you!`,
+        html: `<p>Hello ${admin.name},</p><p>You requested a password reset for your admin account.</p><p>Please click the link below to reset your password:</p><p><a href="${frontendUrl}/reset-password?token=${resetToken}">Reset Password</a></p><p>This link will expire in 1 hour.</p><p>If you did not request this reset, please ignore this email.</p><p>Thank you!</p>`
       });
 
       logger.info(`Password reset requested for admin: ${admin.id} - ${admin.email}`);

@@ -33,7 +33,7 @@ export class AppointmentController {
       const { name, email, phone, address, date_time, duration, service } = value;
 
       // Check for double booking
-      const existingAppointment = await this.appointmentModel.findByDateTime(new Date(date_time));
+      const existingAppointment = await this.appointmentModel.findByDateTime(new Date(date_time), duration);
       if (existingAppointment) {
         res.status(409).json({
           success: false,

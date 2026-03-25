@@ -1,4 +1,639 @@
-const checkAuth = async () => {
+###client/lib/api.ts
+```
+export interface LoginCredentials {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  success: boolean;
+  message: string;
+  data: {
+    token: string;
+    admin: {
+      id: number;
+      name: string;
+      email: string;
+      role: string;
+    };
+  };
+}
+
+export interface ForgotPasswordRequest {
+  email: string;
+}
+
+export interface ForgotPasswordResponse {
+  success: boolean;
+  message: string;
+}
+
+// Dashboard interfaces
+export interface DashboardFilters {
+  status?: string;
+  start_date?: string;
+  end_date?: string;
+}
+
+export interface DashboardResponse {
+  success: boolean;
+  data: {
+    appointments: Appointment[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  };
+}
+
+export interface Appointment {
+  id: number;
+  client_name: string;
+  client_email: string;
+  date_time: string;
+  duration: number;
+  status: 'pending' | 'confirmed' | 'completed' | 'cancelled' | 'missed';
+  created_at: string;
+  updated_at: string;
+}
+
+// Appointment creation interface
+export interface CreateAppointmentRequest {
+  client_name: string;
+  client_email: string;
+  date_time: string;
+  duration: number;
+}
+
+export interface CreateAppointmentResponse {
+  success: boolean;
+  message: string;
+  data: Appointment;
+}
+
+// Appointment update interface
+export interface UpdateAppointmentRequest {
+  date_time?: string;
+  duration?: number;
+  status?: string;
+}
+
+export interface UpdateAppointmentResponse {
+  success: boolean;
+  message: string;
+  data: Appointment;
+}
+
+// Admin interfaces
+export interface Admin {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+}
+
+export interface AdminResponse {
+  success: boolean;
+  data: Admin;
+}
+
+class ApiService {
+  private baseURL: string;
+
+  constructor() {
+    // In development, we'll use the server port 3008
+    // In production, this would be the actual API URL
+    this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  }
+
+  private getHeaders(): HeadersInit {
+    return {
+      'Content-Type': 'application/json',
+    };
+  }
+
+  private async handleResponse<T>(response: Response): Promise<T> {
+    const contentType = response.headers.get('content-type');
+    const isJson = contentType && contentType.includes('application/json');
+
+    if (!response.ok) {
+      let errorMessage = 'An error occurred';
+      
+      if (isJson) {
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || 'An error occurred';
+        } catch {
+          errorMessage = response.statusText || 'An error occurred';
+        }
+      } else {
+        errorMessage = response.statusText || 'An error occurred';
+      }
+
+      throw new Error(errorMessage);
+    }
+
+    if (response.status === 204 || response.headers.get('content-length') === '0') {
+      return {} as T;
+    }
+
+    if (isJson) {
+      return response.json();
+    }
+
+    return response.text() as unknown as T;
+  }
+
+  // Authentication endpoints
+  async login(credentials: LoginCredentials): Promise<LoginResponse> {
+    console.log('================ Login tets ==================');
+    const response = await fetch(`${this.baseURL}/api/admin/login`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(credentials),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    console.log('================ Login Response ==================');
+    console.log('Status:', response.status);
+    console.log('Headers:', response.headers);
+
+    return this.handleResponse<LoginResponse>(response);
+  }
+
+  async forgotPassword(request: ForgotPasswordRequest): Promise<ForgotPasswordResponse> {
+    const response = await fetch(`${this.baseURL}/api/admin/forgot-password`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(request),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    return this.handleResponse<ForgotPasswordResponse>(response);
+  }
+
+  // Admin endpoints
+  async getAdminProfile(): Promise<AdminResponse> {
+    const response = await fetch(`${this.baseURL}/api/admin/profile`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    return this.handleResponse<AdminResponse>(response);
+  }
+
+  async logout(): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${this.baseURL}/api/admin/logout`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    return this.handleResponse<{ success: boolean; message: string }>(response);
+  }
+
+  // Dashboard endpoints
+  async getDashboard(page: number = 1, limit: number = 10, filters?: DashboardFilters): Promise<DashboardResponse> {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+    });
+
+    if (filters?.status) {
+      params.append('status', filters.status);
+    }
+    if (filters?.start_date) {
+      params.append('start_date', filters.start_date);
+    }
+    if (filters?.end_date) {
+      params.append('end_date', filters.end_date);
+    }
+
+    const response = await fetch(`${this.baseURL}/api/admin/dashboard?${params.toString()}`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    return this.handleResponse<DashboardResponse>(response);
+  }
+
+  // Appointment management endpoints
+  async createAppointment(data: CreateAppointmentRequest): Promise<CreateAppointmentResponse> {
+    const response = await fetch(`${this.baseURL}/api/appointments`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(data),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    return this.handleResponse<CreateAppointmentResponse>(response);
+  }
+
+  async getAppointment(id: number): Promise<{ success: boolean; data: Appointment }> {
+    const response = await fetch(`${this.baseURL}/api/appointments/${id}`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    return this.handleResponse<{ success: boolean; data: Appointment }>(response);
+  }
+
+  async updateAppointment(id: number, data: UpdateAppointmentRequest): Promise<UpdateAppointmentResponse> {
+    const response = await fetch(`${this.baseURL}/api/admin/appointments/${id}`, {
+      method: 'PUT',
+      headers: this.getHeaders(),
+      body: JSON.stringify(data),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    return this.handleResponse<UpdateAppointmentResponse>(response);
+  }
+
+  async cancelAppointment(id: number): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${this.baseURL}/api/admin/appointments/${id}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+      credentials: 'include', // Include cookies in the request
+    });
+
+    return this.handleResponse<{ success: boolean; message: string }>(response);
+  }
+
+  // Utility methods
+  isAuthenticated(): boolean {
+    // For cookie-based auth, we need to check if we have a valid session
+    // This is typically done by making a request to a protected endpoint
+    // or checking for the presence of auth cookies
+    return true; // This will be handled by the server-side session
+  }
+}
+
+// Cache interfaces
+export interface CacheStats {
+  connected: boolean;
+  keyCount: number;
+  memoryUsage: number;
+  timestamp: string;
+}
+
+export interface CacheHealth {
+  status: 'healthy' | 'unhealthy';
+  connected: boolean;
+  keyCount: number;
+  memoryUsage: number;
+  timestamp: string;
+  error?: string;
+}
+
+// Cache endpoints
+export async function getCacheStats(): Promise<{ success: boolean; data: CacheStats }> {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const response = await fetch(`${baseURL}/api/cache/stats`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+  });
+  
+  const contentType = response.headers.get('content-type');
+  const isJson = contentType && contentType.includes('application/json');
+
+  if (!response.ok) {
+    let errorMessage = 'An error occurred';
+    
+    if (isJson) {
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || 'An error occurred';
+      } catch {
+        errorMessage = response.statusText || 'An error occurred';
+      }
+    } else {
+      errorMessage = response.statusText || 'An error occurred';
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return {} as { success: boolean; data: CacheStats };
+  }
+
+  if (isJson) {
+    return response.json();
+  }
+
+  return response.text() as unknown as { success: boolean; data: CacheStats };
+}
+
+export async function clearCache(): Promise<{ success: boolean; message: string }> {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const response = await fetch(`${baseURL}/api/cache/clear`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+  });
+  
+  const contentType = response.headers.get('content-type');
+  const isJson = contentType && contentType.includes('application/json');
+
+  if (!response.ok) {
+    let errorMessage = 'An error occurred';
+    
+    if (isJson) {
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || 'An error occurred';
+      } catch {
+        errorMessage = response.statusText || 'An error occurred';
+      }
+    } else {
+      errorMessage = response.statusText || 'An error occurred';
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return {} as { success: boolean; message: string };
+  }
+
+  if (isJson) {
+    return response.json();
+  }
+
+  return response.text() as unknown as { success: boolean; message: string };
+}
+
+export async function invalidateCache(pattern: string): Promise<{ success: boolean; message: string }> {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const response = await fetch(`${baseURL}/api/cache/invalidate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ pattern }),
+    credentials: 'include',
+  });
+  
+  const contentType = response.headers.get('content-type');
+  const isJson = contentType && contentType.includes('application/json');
+
+  if (!response.ok) {
+    let errorMessage = 'An error occurred';
+    
+    if (isJson) {
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || 'An error occurred';
+      } catch {
+        errorMessage = response.statusText || 'An error occurred';
+      }
+    } else {
+      errorMessage = response.statusText || 'An error occurred';
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return {} as { success: boolean; message: string };
+  }
+
+  if (isJson) {
+    return response.json();
+  }
+
+  return response.text() as unknown as { success: boolean; message: string };
+}
+
+export async function getCacheHealth(): Promise<{ success: boolean; data: CacheHealth }> {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const response = await fetch(`${baseURL}/api/cache/health`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+  });
+  
+  const contentType = response.headers.get('content-type');
+  const isJson = contentType && contentType.includes('application/json');
+
+  if (!response.ok) {
+    let errorMessage = 'An error occurred';
+    
+    if (isJson) {
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || 'An error occurred';
+      } catch {
+        errorMessage = response.statusText || 'An error occurred';
+      }
+    } else {
+      errorMessage = response.statusText || 'An error occurred';
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return {} as { success: boolean; data: CacheHealth };
+  }
+
+  if (isJson) {
+    return response.json();
+  }
+
+  return response.text() as unknown as { success: boolean; data: CacheHealth };
+}
+
+// Health endpoints
+export async function getHealth(): Promise<{ status: string; timestamp: string; uptime: number }> {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const response = await fetch(`${baseURL}/api/health`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+  });
+  
+  const contentType = response.headers.get('content-type');
+  const isJson = contentType && contentType.includes('application/json');
+
+  if (!response.ok) {
+    let errorMessage = 'An error occurred';
+    
+    if (isJson) {
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || 'An error occurred';
+      } catch {
+        errorMessage = response.statusText || 'An error occurred';
+      }
+    } else {
+      errorMessage = response.statusText || 'An error occurred';
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return {} as { status: string; timestamp: string; uptime: number };
+  }
+
+  if (isJson) {
+    return response.json();
+  }
+
+  return response.text() as unknown as { status: string; timestamp: string; uptime: number };
+}
+
+export async function getReadiness(): Promise<{ status: string; timestamp: string }> {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const response = await fetch(`${baseURL}/api/health/ready`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+  });
+  
+  const contentType = response.headers.get('content-type');
+  const isJson = contentType && contentType.includes('application/json');
+
+  if (!response.ok) {
+    let errorMessage = 'An error occurred';
+    
+    if (isJson) {
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || 'An error occurred';
+      } catch {
+        errorMessage = response.statusText || 'An error occurred';
+      }
+    } else {
+      errorMessage = response.statusText || 'An error occurred';
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return {} as { status: string; timestamp: string };
+  }
+
+  if (isJson) {
+    return response.json();
+  }
+
+  return response.text() as unknown as { status: string; timestamp: string };
+}
+
+export async function getLiveness(): Promise<{ status: string; timestamp: string; pid: number; uptime: number }> {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const response = await fetch(`${baseURL}/api/health/live`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+  });
+  
+  const contentType = response.headers.get('content-type');
+  const isJson = contentType && contentType.includes('application/json');
+
+  if (!response.ok) {
+    let errorMessage = 'An error occurred';
+    
+    if (isJson) {
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || 'An error occurred';
+      } catch {
+        errorMessage = response.statusText || 'An error occurred';
+      }
+    } else {
+      errorMessage = response.statusText || 'An error occurred';
+    }
+
+    throw new Error(errorMessage);
+  }
+
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return {} as { status: string; timestamp: string; pid: number; uptime: number };
+  }
+
+  if (isJson) {
+    return response.json();
+  }
+
+  return response.text() as unknown as { status: string; timestamp: string; pid: number; uptime: number };
+}
+
+export const apiService = new ApiService();
+
+```
+
+###client/lib/auth.ts
+```
+'use client';
+
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { apiService, LoginCredentials } from './api';
+
+interface AuthContextType {
+  isAuthenticated: boolean;
+  admin: {
+    id: number;
+    name: string;
+    email: string;
+    role: string;
+  } | null;
+  isLoading: boolean;
+  error: string | null;
+  login: (credentials: LoginCredentials) => Promise<void>;
+  logout: () => void;
+  clearError: () => void;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
+
+interface AuthProviderProps {
+  children: ReactNode;
+}
+
+export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [admin, setAdmin] = useState<{
+    id: number;
+    name: string;
+    email: string;
+    role: string;
+  } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Check if user is already authenticated on mount
+    const checkAuth = async () => {
       try {
         // For cookie-based auth, we need to make a request to verify the session
         // We'll try to fetch the admin profile to check if we have a valid session
@@ -19,3 +654,1129 @@ const checkAuth = async () => {
         setIsLoading(false);
       }
     };
+
+    checkAuth();
+  }, []);
+
+  const login = async (credentials: LoginCredentials) => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      console.log('Login test with credentials:', credentials);
+      const response = await apiService.login(credentials);
+      console.log('Login response:', response);
+      
+      if (response.success) {
+        setIsAuthenticated(true);
+        setAdmin(response.data.admin);
+      } else {
+        setError(response.message || 'Login failed');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred during login');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      // Make a logout request to clear server-side session
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008'}/api/admin/logout`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+    } catch (err) {
+      console.error('Logout request failed:', err);
+    }
+    
+    setIsAuthenticated(false);
+    setAdmin(null);
+    setError(null);
+  };
+
+  const clearError = () => {
+    setError(null);
+  };
+
+  const value: AuthContextType = {
+    isAuthenticated,
+    admin,
+    isLoading,
+    error,
+    login,
+    logout,
+    clearError,
+  };
+
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+```
+
+###client/app/layout.ts
+```
+import type { Metadata, Viewport } from "next";
+import { Inter, Geist_Mono } from 'next/font/google'
+import "./globals.css";
+import { AuthProvider } from "../lib/auth";
+
+const inter = Inter({ 
+  subsets: ["latin"],
+  variable: "--font-inter",
+});
+
+const geistMono = Geist_Mono({ 
+  subsets: ["latin"],
+  variable: "--font-geist-mono",
+});
+
+export const metadata: Metadata = {
+  title: 'SALON OS - Modern Management',
+  description: 'A comprehensive salon management system with appointment booking, payments, and customer care',
+  generator: 'B00ZE',
+}
+
+export const viewport: Viewport = {
+  themeColor: '#0D0D0D',
+  width: 'device-width',
+  initialScale: 1,
+}
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en" className="dark">
+      <body
+        className={`${inter.variable} ${geistMono.variable} font-sans antialiased bg-background text-foreground min-h-screen`}
+      >
+        <AuthProvider>
+          {children}
+        </AuthProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+###client/app/(auth)/login/page.ts
+```
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/lib/auth';
+
+export default function LoginPage() {
+  const router = useRouter();
+  const { login, isAuthenticated, isLoading, error, clearError } = useAuth();
+  
+  const [formData, setFormData] = useState({
+    email: '',
+    password: ''
+  });
+  const [showPassword, setShowPassword] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    clearError();
+    
+    try {
+      await login(formData);
+    } catch (err) {
+      // Error is handled by the auth context
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      router.push('/dashboard');
+    }
+  }, [isAuthenticated, router]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value
+    });
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-slate-900 via-slate-800 to-slate-900">
+      <div className="w-full max-w-md border border-slate-700 bg-slate-800/50 backdrop-blur-sm rounded-lg p-6">
+        <div className="space-y-1 text-center mb-6">
+          <h1 className="text-2xl font-bold text-white">
+            Admin Login
+          </h1>
+          <p className="text-slate-400">
+            Enter your credentials to access the admin dashboard
+          </p>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg">
+              {error}
+            </div>
+          )}
+          
+          <div className="space-y-2">
+            <label htmlFor="email" className="block text-sm font-medium text-slate-300">
+              Email
+            </label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              placeholder="admin@example.com"
+              value={formData.email}
+              onChange={handleChange}
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+              required
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="password" className="block text-sm font-medium text-slate-300">
+              Password
+            </label>
+            <div className="relative">
+              <input
+                id="password"
+                name="password"
+                type={showPassword ? "text" : "password"}
+                placeholder="Enter your password"
+                value={formData.password}
+                onChange={handleChange}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent pr-10"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                {showPassword ? '🙈' : '👁️'}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoading ? (
+              <span className="flex items-center justify-center">
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                Signing in...
+              </span>
+            ) : (
+              'Sign In'
+            )}
+          </button>
+        </form>
+
+        <div className="mt-4 text-center">
+          <a
+            href="/forgot-password"
+            className="text-sm text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            Forgot your password?
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+```
+
+###client/app/(auth)/forgot-password/page.ts
+```
+'use client';
+
+import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { apiService } from '@/lib/api';
+
+export default function ForgotPasswordPage() {
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await apiService.forgotPassword({ email });
+      
+      if (response.success) {
+        setMessage({
+          type: 'success',
+          text: 'Password reset instructions have been sent to your email address.'
+        });
+        // Clear the form
+        setEmail('');
+      } else {
+        setMessage({
+          type: 'error',
+          text: response.message || 'An error occurred. Please try again.'
+        });
+      }
+    } catch (err) {
+      setMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'An error occurred. Please try again.'
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-slate-900 via-slate-800 to-slate-900">
+      <div className="w-full max-w-md border border-slate-700 bg-slate-800/50 backdrop-blur-sm rounded-lg p-6">
+        <div className="space-y-1 text-center mb-6">
+          <h1 className="text-2xl font-bold text-white">
+            Forgot Password
+          </h1>
+          <p className="text-slate-400">
+            Enter your email address and we&apos;ll send you instructions to reset your password.
+          </p>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {message && (
+            <div className={`px-4 py-3 rounded-lg ${
+              message.type === 'success' 
+                ? 'bg-green-500/10 border border-green-500/20 text-green-400' 
+                : 'bg-red-500/10 border border-red-500/20 text-red-400'
+            }`}>
+              {message.text}
+            </div>
+          )}
+          
+          <div className="space-y-2">
+            <label htmlFor="email" className="block text-sm font-medium text-slate-300">
+              Email Address
+            </label>
+            <input
+              id="email"
+              type="email"
+              placeholder="admin@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
+              required
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={isLoading || !email}
+            className="w-full px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoading ? (
+              <span className="flex items-center justify-center">
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                Sending reset instructions...
+              </span>
+            ) : (
+              'Send Reset Instructions'
+            )}
+          </button>
+        </form>
+
+        <div className="mt-4 text-center">
+          <button
+            onClick={() => router.push('/login')}
+            className="text-sm text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            Back to Login
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+```
+
+###client/app/(dashboard)/analytics/page.ts
+```
+'use client';
+
+import React, { useState, useEffect } from "react";
+import { motion } from "framer-motion";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, PieChart, Pie, Cell,
+} from "recharts";
+import { ValueType } from "recharts/types/component/DefaultTooltipContent";
+import { format, subDays, startOfDay } from "date-fns";
+
+import Header from "@/components/Header";
+import { apiService, Appointment } from "@/lib/api";
+import { useToast } from "@/components/ui/use-toast";
+
+const COLORS = [
+  "hsl(var(--chart-1))",
+  "hsl(var(--chart-2))",
+  "hsl(var(--chart-3))",
+  "hsl(var(--chart-4))",
+  "hsl(var(--chart-5))",
+];
+
+// ✅ typed and moved outside component
+interface TooltipPayloadEntry {
+  date?: string;
+  name?: string;
+}
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: { value: ValueType; payload: TooltipPayloadEntry }[];
+}
+
+function CustomTooltip({ active, payload }: CustomTooltipProps) {
+  if (active && payload && payload.length) {
+    const entry = payload[0].payload as TooltipPayloadEntry;
+    return (
+      <div className="neumo-sm rounded-xl px-4 py-2">
+        <p className="text-sm font-medium text-foreground">
+          {entry.date ?? entry.name}
+        </p>
+        <p className="text-sm text-primary font-semibold">{payload[0].value}</p>
+      </div>
+    );
+  }
+  return null;
+}
+
+export default function Analytics() {
+  const { toast } = useToast();
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+
+  useEffect(() => {
+  let cancelled = false; // ✅ prevents setState on unmounted component
+
+  const load = async () => {
+    try {
+      const res = await apiService.getDashboard(1, 100);
+      if (!cancelled) setAppointments(res.data?.appointments ?? []);
+    } catch {
+      if (!cancelled) toast({ title: "Failed to load analytics", variant: "destructive" });
+    }
+  };
+
+  load();
+
+  return () => { cancelled = true; }; // cleanup
+}, [toast]);
+
+  // Status distribution
+  const statusData = React.useMemo(() => {
+    const counts = appointments.reduce<Record<string, number>>((acc, a) => {
+      acc[a.status] = (acc[a.status] || 0) + 1;
+      return acc;
+    }, {});
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [appointments]);
+
+  // Appointments per day (last 14 days)
+  const dailyData = React.useMemo(() => {
+    const data = [];
+    for (let i = 13; i >= 0; i--) {
+      const date = startOfDay(subDays(new Date(), i));
+      const dateStr = format(date, "yyyy-MM-dd");
+      const count = appointments.filter(
+        (a) => format(new Date(a.date_time), "yyyy-MM-dd") === dateStr
+      ).length;
+      data.push({ date: format(date, "MMM d"), count });
+    }
+    return data;
+  }, [appointments]);
+
+  return (
+    <div className="space-y-6">
+      <Header />
+
+      <motion.h1
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="text-2xl font-bold text-foreground"
+      >
+        Analytics
+      </motion.h1>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Daily trend */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="neumo rounded-2xl p-6"
+        >
+          <h3 className="text-base font-semibold text-foreground mb-4">
+            Daily Trend (14 days)
+          </h3>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={dailyData}>
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="hsl(var(--border))"
+                  vertical={false}
+                />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  allowDecimals={false}
+                  tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <Tooltip content={<CustomTooltip />} cursor={false} />
+                <Line
+                  type="monotone"
+                  dataKey="count"
+                  stroke="hsl(var(--primary))"
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: "hsl(var(--primary))" }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </motion.div>
+
+        {/* Status distribution */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="neumo rounded-2xl p-6"
+        >
+          <h3 className="text-base font-semibold text-foreground mb-4">
+            Status Distribution
+          </h3>
+          <div className="h-64 flex items-center justify-center">
+            {statusData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={statusData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={100}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {statusData.map((_, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={COLORS[index % COLORS.length]}
+                      />
+                    ))}
+                  </Pie>
+                  <Tooltip content={<CustomTooltip />} />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-sm text-muted-foreground">No data available</p>
+            )}
+          </div>
+          {statusData.length > 0 && (
+            <div className="flex flex-wrap gap-3 mt-4 justify-center">
+              {statusData.map((entry, i) => (
+                <div key={entry.name} className="flex items-center gap-2 text-sm">
+                  <div
+                    className="w-3 h-3 rounded-full"
+                    style={{ backgroundColor: COLORS[i % COLORS.length] }}
+                  />
+                  <span className="capitalize text-muted-foreground">{entry.name}</span>
+                  <span className="font-medium text-foreground">{entry.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+```
+
+###client/app/(dashboard)/appointments/page.ts
+```
+'use client';
+
+import React, { useState, useEffect, useCallback } from "react";
+import { useToast } from "@/components/ui/use-toast";
+import { motion } from "framer-motion";
+import { Plus } from "lucide-react";
+
+import Header from "@/components/Header";
+import AppointmentTable from "@/components/dashboard/AppointmentTable";
+import AppointmentDetailModal from "@/components/modals/AppointmentDetailModal";
+import CancelConfirmModal from "@/components/modals/CancelConfirmModal";
+import RescheduleModal from "@/components/modals/RescheduleModal";
+import CreateAppointmentModal from "@/components/modals/CreateAppointmentModal";
+import { apiService, Appointment, CreateAppointmentRequest } from "@/lib/api";
+
+export default function Appointments() {
+  const { toast } = useToast();
+
+  // ── Data state ────────────────────────────────────────────────────────────
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isMutating, setIsMutating] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+
+  // ── Modal state ───────────────────────────────────────────────────────────
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const [showCancel, setShowCancel] = useState(false);
+  const [showReschedule, setShowReschedule] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState<Appointment | null>(null);
+
+  // ── Fetch ─────────────────────────────────────────────────────────────────
+  const fetchAppointments = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const res = await apiService.getDashboard(1, 100);
+      setAppointments(res.data?.appointments ?? []);
+    } catch {
+      toast({ title: "Failed to load appointments", variant: "destructive" });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    fetchAppointments();
+  }, [fetchAppointments]);
+
+  // ── Update helper (optimistic) ────────────────────────────────────────────
+  const mutate = useCallback(
+    async (id: number, data: { status?:Appointment['status'] ; date_time?: string }) => {
+      setIsMutating(true);
+      try {
+        await apiService.updateAppointment(id, data);
+        setAppointments((prev) =>
+          prev.map((a) => (a.id === id ? { ...a, ...data } : a))
+        );
+      } catch {
+        toast({ title: "Something went wrong", variant: "destructive" });
+        throw new Error("Mutation failed");
+      } finally {
+        setIsMutating(false);
+      }
+    },
+    [toast]
+  );
+
+  // ── Create ────────────────────────────────────────────────────────────────
+  const handleCreate = useCallback(
+    async (data: CreateAppointmentRequest) => {
+      setIsCreating(true);
+      try {
+        const res = await apiService.createAppointment(data);
+        // Append the new appointment locally — no re-fetch needed
+        setAppointments((prev) => [...prev, res.data]);
+        toast({ title: "Appointment created" });
+        setShowCreate(false);
+      } catch {
+        toast({ title: "Failed to create appointment", variant: "destructive" });
+      } finally {
+        setIsCreating(false);
+      }
+    },
+    [toast]
+  );
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleConfirm = async (apt: Appointment) => {
+    await mutate(apt.id, { status: "confirmed" });
+    toast({ title: "Appointment confirmed" });
+  };
+
+  const handleCancelClick = (apt: Appointment) => {
+    setCancelTarget(apt);
+    setShowCancel(true);
+  };
+
+  const handleCancelConfirm = async () => {
+    if (!cancelTarget) return;
+    await mutate(cancelTarget.id, { status: "cancelled" });
+    toast({ title: "Appointment cancelled" });
+    setShowCancel(false);
+    setCancelTarget(null);
+  };
+
+  const handleRescheduleClick = (apt: Appointment) => {
+    setRescheduleTarget(apt);
+    setShowReschedule(true);
+  };
+
+  const handleRescheduleSubmit = async (apt: Appointment, newDateTime: string) => {
+    await mutate(apt.id, { date_time: newDateTime });
+    toast({ title: "Appointment rescheduled" });
+    setShowReschedule(false);
+    setRescheduleTarget(null);
+  };
+
+  const handleView = (apt: Appointment) => {
+    setSelectedAppointment(apt);
+    setShowDetail(true);
+  };
+
+  const handleMarkCompleted = async (apt: Appointment) => {
+    await mutate(apt.id, { status: "completed" });
+    toast({ title: "Marked as completed" });
+  };
+
+  const handleMarkMissed = async (apt: Appointment) => {
+    await mutate(apt.id, { status: "missed" });
+    toast({ title: "Marked as missed" });
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-6">
+      <Header />
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex items-center justify-between"
+      >
+        <h1 className="text-2xl font-bold text-foreground">All Appointments</h1>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="neumo-btn px-4 py-2.5 rounded-xl text-sm font-medium text-primary flex items-center gap-2"
+        >
+          <Plus className="w-4 h-4" /> New Appointment
+        </button>
+      </motion.div>
+
+      <AppointmentTable
+        appointments={appointments}
+        isLoading={isLoading}
+        onConfirm={handleConfirm}
+        onCancel={handleCancelClick}
+        onReschedule={handleRescheduleClick}
+        onView={handleView}
+      />
+
+      <AppointmentDetailModal
+        appointment={selectedAppointment}
+        open={showDetail}
+        onClose={() => setShowDetail(false)}
+        onConfirm={handleConfirm}
+        onCancel={handleCancelClick}
+        onReschedule={handleRescheduleClick}
+        onMarkCompleted={handleMarkCompleted}
+        onMarkMissed={handleMarkMissed}
+      />
+
+      <CancelConfirmModal
+        open={showCancel}
+        onClose={() => { setShowCancel(false); setCancelTarget(null); }}
+        onConfirm={handleCancelConfirm}
+        isLoading={isMutating}
+        clientName={cancelTarget?.client_name}
+      />
+
+      <RescheduleModal
+        appointment={rescheduleTarget}
+        open={showReschedule}
+        onClose={() => { setShowReschedule(false); setRescheduleTarget(null); }}
+        onSubmit={handleRescheduleSubmit}
+        isLoading={isMutating}
+      />
+
+      <CreateAppointmentModal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        onSubmit={handleCreate}
+        isLoading={isCreating}
+      />
+    </div>
+  );
+}
+```
+
+###client/app/(dashboard)/dashboard/page.ts
+```
+'use client';
+
+import React, { useState, useEffect, useCallback } from "react";
+import { useToast } from "@/components/ui/use-toast";
+import { CalendarCheck, CalendarDays, Percent, XCircle } from "lucide-react";
+import { startOfDay, endOfDay, startOfWeek, endOfWeek } from "date-fns";
+
+import Header from "@/components/Header";
+import StatsCard from "@/components/dashboard/StatsCard";
+import AppointmentChart from "@/components/dashboard/AppointmentChart";
+import AppointmentTable from "@/components/dashboard/AppointmentTable";
+import AppointmentDetailModal from "@/components/modals/AppointmentDetailModal";
+import CancelConfirmModal from "@/components/modals/CancelConfirmModal";
+import RescheduleModal from "@/components/modals/RescheduleModal";
+import { apiService, Appointment } from "@/lib/api";
+
+export default function Dashboard() {
+  const { toast } = useToast();
+
+  // ── Data state ──────────────────────────────────────────────────────────
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isMutating, setIsMutating] = useState(false);
+
+  // ── Modal state ──────────────────────────────────────────────────────────
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const [showCancel, setShowCancel] = useState(false);
+  const [showReschedule, setShowReschedule] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState<Appointment | null>(null);
+
+  // ── Fetch ────────────────────────────────────────────────────────────────
+  const fetchAppointments = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const res = await apiService.getDashboard(1, 100);
+
+      console.log('==============dashboard============', res.data.appointments);
+      setAppointments(res.data?.appointments ?? []);
+    } catch {
+      toast({ title: "Failed to load appointments", variant: "destructive" });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    fetchAppointments();
+  }, [fetchAppointments]);
+
+  // ── Shared mutation helper ───────────────────────────────────────────────
+  const mutate = useCallback(
+    async (id: number, data: { status?: Appointment['status']; date_time?: string }) => {
+      setIsMutating(true);
+      try {
+        await apiService.updateAppointment(id, data);
+        // Optimistically update local state instead of re-fetching
+        setAppointments((prev) =>
+          prev.map((a) => (a.id === id ? { ...a, ...data } : a))
+        );
+      } catch {
+        toast({ title: "Something went wrong", variant: "destructive" });
+        throw new Error("Mutation failed"); // re-throw so callers can bail
+      } finally {
+        setIsMutating(false);
+      }
+    },
+    [toast]
+  );
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+  const handleConfirm = async (apt: Appointment) => {
+    await mutate(apt.id, { status: "confirmed" });
+    toast({ title: "Appointment confirmed", description: `${apt.client_name}'s appointment has been confirmed.` });
+  };
+
+  const handleCancelClick = (apt: Appointment) => {
+    setCancelTarget(apt);
+    setShowCancel(true);
+  };
+
+  const handleCancelConfirm = async () => {
+    if (!cancelTarget) return;
+    await mutate(cancelTarget.id, { status: "cancelled" });
+    toast({ title: "Appointment cancelled", description: `${cancelTarget.client_name}'s appointment has been cancelled.` });
+    setShowCancel(false);
+    setCancelTarget(null);
+  };
+
+  const handleRescheduleClick = (apt: Appointment) => {
+    setRescheduleTarget(apt);
+    setShowReschedule(true);
+  };
+
+  const handleRescheduleSubmit = async (apt: Appointment, newDateTime: string) => {
+    await mutate(apt.id, { date_time: newDateTime });
+    toast({ title: "Appointment rescheduled", description: `${apt.client_name}'s appointment has been rescheduled.` });
+    setShowReschedule(false);
+    setRescheduleTarget(null);
+  };
+
+  const handleView = (apt: Appointment) => {
+    setSelectedAppointment(apt);
+    setShowDetail(true);
+  };
+
+  const handleMarkCompleted = async (apt: Appointment) => {
+    await mutate(apt.id, { status: "completed" });
+    toast({ title: "Marked as completed" });
+  };
+
+  const handleMarkMissed = async (apt: Appointment) => {
+    await mutate(apt.id, { status: "missed" });
+    toast({ title: "Marked as missed" });
+  };
+
+  // ── Stats ────────────────────────────────────────────────────────────────
+  const today = new Date();
+  const todayStart = startOfDay(today);
+  const todayEnd = endOfDay(today);
+  const weekStart = startOfWeek(today, { weekStartsOn: 1 });
+  const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+
+  const todayAppointments = appointments.filter((a) => {
+    const d = new Date(a.date_time);
+    return d >= todayStart && d <= todayEnd && a.status !== "cancelled";
+  });
+
+  const weekAppointments = appointments.filter((a) => {
+    const d = new Date(a.date_time);
+    return d >= weekStart && d <= weekEnd && a.status !== "cancelled";
+  });
+
+  const completedCount = appointments.filter((a) => a.status === "completed").length;
+  const totalNonCancelled = appointments.filter((a) => a.status !== "cancelled").length;
+  const completionRate = totalNonCancelled > 0
+    ? Math.round((completedCount / totalNonCancelled) * 100)
+    : 0;
+
+  const cancellationsToday = appointments.filter((a) => {
+    const d = new Date(a.date_time);
+    return d >= todayStart && d <= todayEnd && a.status === "cancelled";
+  }).length;
+
+  const stats = [
+    { title: "Today's Appointments", value: todayAppointments.length, icon: CalendarCheck, color: "hsl(var(--primary))", subtitle: "Scheduled for today" },
+    { title: "This Week", value: weekAppointments.length, icon: CalendarDays, color: "hsl(var(--chart-2))", subtitle: "Mon – Sun" },
+    { title: "Completion Rate", value: `${completionRate}%`, icon: Percent, color: "hsl(var(--chart-3))", subtitle: "Of all appointments" },
+    { title: "Cancellations Today", value: cancellationsToday, icon: XCircle, color: "hsl(var(--destructive))", subtitle: "Cancelled today" },
+  ];
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-6">
+      <Header />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {stats.map((stat, i) => (
+          <StatsCard key={stat.title} {...stat} index={i} />
+        ))}
+      </div>
+
+      <AppointmentChart appointments={appointments} />
+
+      <AppointmentTable
+        appointments={appointments}
+        isLoading={isLoading}
+        onConfirm={handleConfirm}
+        onCancel={handleCancelClick}
+        onReschedule={handleRescheduleClick}
+        onView={handleView}
+      />
+
+      <AppointmentDetailModal
+        appointment={selectedAppointment}
+        open={showDetail}
+        onClose={() => setShowDetail(false)}
+        onConfirm={handleConfirm}
+        onCancel={handleCancelClick}
+        onReschedule={handleRescheduleClick}
+        onMarkCompleted={handleMarkCompleted}
+        onMarkMissed={handleMarkMissed}
+      />
+
+      <CancelConfirmModal
+        open={showCancel}
+        onClose={() => { setShowCancel(false); setCancelTarget(null); }}
+        onConfirm={handleCancelConfirm}
+        isLoading={isMutating}
+        clientName={cancelTarget?.client_name}
+      />
+
+      <RescheduleModal
+        appointment={rescheduleTarget}
+        open={showReschedule}
+        onClose={() => { setShowReschedule(false); setRescheduleTarget(null); }}
+        onSubmit={handleRescheduleSubmit}
+        isLoading={isMutating}
+      />
+    </div>
+  );
+}
+```
+
+###client/app/(dashboard)/settings/page.ts
+```
+'use client';
+
+import React, { useState, useEffect } from "react";
+import { motion } from "framer-motion";
+import { User, Mail } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { useAuth } from "@/lib/auth";
+import { apiService, Admin } from "@/lib/api";
+import Header from "@/components/Header";
+
+export default function Settings() {
+  const [user, setUser] = useState<Admin | null>(null);
+  const [loading, setLoading] = useState(true);
+  const { admin } = useAuth();
+
+  useEffect(() => {
+    if (admin) {
+      setUser(admin);
+      setLoading(false);
+    } else {
+      // Try to fetch admin profile if not available in auth context
+      const fetchAdminProfile = async () => {
+        try {
+          const response = await apiService.getAdminProfile();
+          if (response.success) {
+            setUser(response.data);
+          }
+        } catch (error) {
+          console.error('Failed to fetch admin profile:', error);
+        } finally {
+          setLoading(false);
+        }
+      };
+      fetchAdminProfile();
+    }
+  }, [admin]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="w-8 h-8 border-4 border-border border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <Header />
+
+      <motion.h1
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="text-2xl font-bold text-foreground"
+      >
+        Settings
+      </motion.h1>
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="neumo rounded-2xl p-6 max-w-lg"
+      >
+        <h3 className="text-base font-semibold text-foreground mb-4">Profile</h3>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label className="text-sm flex items-center gap-2">
+              <User className="w-3.5 h-3.5" /> Full Name
+            </Label>
+            <div className="neumo-inset rounded-xl px-4 py-2.5 text-sm text-foreground">
+              {user?.name || "Not set"}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-sm flex items-center gap-2">
+              <Mail className="w-3.5 h-3.5" /> Email
+            </Label>
+            <div className="neumo-inset rounded-xl px-4 py-2.5 text-sm text-foreground">
+              {user?.email || "Not set"}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-sm">Role</Label>
+            <div className="neumo-inset rounded-xl px-4 py-2.5 text-sm text-foreground capitalize">
+              {user?.role || "user"}
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+```
+
+###client/app/(dashboard)/layout.ts
+```
+'use client';
+
+import React, { useState } from 'react';
+import { useAuth } from '../../lib/auth';
+import { useRouter } from 'next/navigation';
+import Sidebar from '@/components/Sidebar';
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const { isAuthenticated, isLoading } = useAuth();
+  const router = useRouter();
+
+  // Show loading spinner while checking authentication
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-slate-900 via-slate-800 to-slate-900">
+        <div className="text-center">
+          <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-400">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Redirect to login if not authenticated
+  if (!isAuthenticated) {
+    router.push('/login');
+    return null;
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} />
+      <main
+        className="transition-all duration-300"
+        style={{ marginLeft: collapsed ? 72 : 260 }}
+      >
+        <div className="p-4 md:p-6 lg:p-8 max-w-7xl">
+          {children}
+        </div>
+      </main>
+    </div>
+  );
+}
+```

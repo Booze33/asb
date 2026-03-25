@@ -79,7 +79,7 @@ export default function Dashboard() {
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleConfirm = async (apt: Appointment) => {
     await mutate(apt.id, { status: "confirmed" });
-    toast({ title: "Appointment confirmed", description: `${apt.name}'s appointment has been confirmed.` });
+    toast({ title: "Appointment confirmed", description: `${apt.client_name}'s appointment has been confirmed.` });
   };
 
   const handleCancelClick = (apt: Appointment) => {
@@ -90,7 +90,7 @@ export default function Dashboard() {
   const handleCancelConfirm = async () => {
     if (!cancelTarget) return;
     await mutate(cancelTarget.id, { status: "cancelled" });
-    toast({ title: "Appointment cancelled", description: `${cancelTarget.name}'s appointment has been cancelled.` });
+    toast({ title: "Appointment cancelled", description: `${cancelTarget.client_name}'s appointment has been cancelled.` });
     setShowCancel(false);
     setCancelTarget(null);
   };
@@ -102,7 +102,7 @@ export default function Dashboard() {
 
   const handleRescheduleSubmit = async (apt: Appointment, newDateTime: string) => {
     await mutate(apt.id, { date_time: newDateTime });
-    toast({ title: "Appointment rescheduled", description: `${apt.name}'s appointment has been rescheduled.` });
+    toast({ title: "Appointment rescheduled", description: `${apt.client_name}'s appointment has been rescheduled.` });
     setShowReschedule(false);
     setRescheduleTarget(null);
   };
@@ -195,7 +195,7 @@ export default function Dashboard() {
         onClose={() => { setShowCancel(false); setCancelTarget(null); }}
         onConfirm={handleCancelConfirm}
         isLoading={isMutating}
-        clientName={cancelTarget?.name}
+        clientName={cancelTarget?.client_name}
       />
 
       <RescheduleModal

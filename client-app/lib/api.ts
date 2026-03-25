@@ -47,8 +47,8 @@ export interface DashboardResponse {
 
 export interface Appointment {
   id: number;
-  name: string;
-  email: string;
+  client_name: string;
+  client_email: string;
   date_time: string;
   duration: number;
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled' | 'missed';

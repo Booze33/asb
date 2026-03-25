@@ -78,7 +78,7 @@ jobs:
         TWILIO_ACCOUNT_SID: test-sid
         TWILIO_AUTH_TOKEN: test-token
         TWILIO_PHONE_NUMBER: +1234567890
-        FRONTEND_URL: http://localhost:3000
+        FRONTEND_URL: https://asb-8xh8.vercel.app
 
   # Build job
   build:

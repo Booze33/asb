@@ -12,10 +12,8 @@ const corsOptions = {
     const allowedOrigins = process.env.ALLOWED_ORIGINS 
       ? process.env.ALLOWED_ORIGINS.split(',')
       : [
-          'http://localhost:3000',
-          'http://localhost:3001',
-          'http://127.0.0.1:3000',
-          'http://127.0.0.1:3001'
+          'https://asb-8xh8.vercel.app',
+          'https://asb-henna.vercel.app'
         ];
 
     if (allowedOrigins.includes(origin)) {
@@ -64,8 +62,8 @@ export const adminCorsMiddleware = cors({
     const allowedOrigins = process.env.ADMIN_ALLOWED_ORIGINS 
       ? process.env.ADMIN_ALLOWED_ORIGINS.split(',')
       : [
-          'http://localhost:3000',
-          'http://localhost:3001'
+          'https://asb-8xh8.vercel.app',
+          'https://asb-henna.vercel.app'
         ];
 
     if (allowedOrigins.includes(origin)) {
@@ -102,7 +100,7 @@ export const cacheCorsMiddleware = cors({
     const allowedOrigins = process.env.CACHE_ALLOWED_ORIGINS 
       ? process.env.CACHE_ALLOWED_ORIGINS.split(',')
       : [
-          'http://localhost:3000'
+          'https://asb-8xh8.vercel.app'
         ];
 
     if (allowedOrigins.includes(origin)) {

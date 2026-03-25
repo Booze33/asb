@@ -154,7 +154,7 @@ docker-compose up -d
 ```
 
 2. **Access the application**
-- Frontend: http://localhost:3000
+- Frontend: https://asb-8xh8.vercel.app
 - API: http://localhost:3001
 - Health Check: http://localhost:3001/api/health
 
@@ -280,7 +280,7 @@ TWILIO_AUTH_TOKEN="your-twilio-auth-token"
 TWILIO_PHONE_NUMBER="+1234567890"
 
 # Frontend
-FRONTEND_URL="http://localhost:3000"
+FRONTEND_URL="https://asb-8xh8.vercel.app"
 ```
 
 #### Client (.env.local)

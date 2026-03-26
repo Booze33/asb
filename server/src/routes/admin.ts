@@ -97,14 +97,8 @@ router.post('/forgot-password', async (req, res) => {
 
 router.post('/logout', authenticateAdmin, async (req: AuthenticatedRequest, res) => {
   try {
-    // For cookie-based sessions, the server would typically clear the session
-    // Since we're using JWT tokens stored in cookies, we can just clear the cookie
-    res.clearCookie('admin_token', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax'
-    });
-    
+    // For Bearer token auth, the client handles token removal
+    // No cookie to clear - just return success
     logger.info(`Admin logout: ${req.user?.id} - ${req.user?.email}`);
     res.status(200).json({
       success: true,

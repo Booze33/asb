@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { apiService, LoginCredentials } from './api';
+import { getToken, setToken } from './token';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -34,40 +35,35 @@ interface AuthProviderProps {
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [admin, setAdmin] = useState<{
-    id: number;
-    name: string;
-    email: string;
-    role: string;
-  } | null>(null);
+  const [admin, setAdmin] = useState<AuthContextType['admin']>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check if user is already authenticated on mount
-    const checkAuth = async () => {
-      try {
-        // For cookie-based auth, we need to make a request to verify the session
-        // We'll try to fetch the admin profile to check if we have a valid session
-        const response = await apiService.getAdminProfile();
-        if (response.success) {
-          // If this succeeds, the user is authenticated
-          setIsAuthenticated(true);
-          setAdmin(response.data);
-        } else {
-          setIsAuthenticated(false);
-          setAdmin(null);
-        }
-      } catch (err) {
-        console.error('Auth check failed:', err);
-        setIsAuthenticated(false);
-        setAdmin(null);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    // On mount, check if we have a stored token and validate it
+    const stored = getToken();
+    if (!stored) {
+      setIsLoading(false);
+      return;
+    }
 
-    checkAuth();
+    // Validate the stored token by hitting the dashboard with limit=1
+    // This is our auth probe since there's no /profile endpoint
+    apiService.getDashboard(1, 1)
+      .then(res => {
+        if (res.success) {
+          setIsAuthenticated(true);
+          // Restore admin info from sessionStorage
+          const storedAdmin = sessionStorage.getItem('admin_info');
+          if (storedAdmin) setAdmin(JSON.parse(storedAdmin));
+        } else {
+          setToken(null);
+        }
+      })
+      .catch(() => {
+        setToken(null);
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
   const login = async (credentials: LoginCredentials) => {
@@ -78,8 +74,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const response = await apiService.login(credentials);
       
       if (response.success) {
+        setToken(response.data.token);
         setIsAuthenticated(true);
         setAdmin(response.data.admin);
+        // Persist admin info for page refresh restoration
+        sessionStorage.setItem('admin_info', JSON.stringify(response.data.admin));
       } else {
         setError(response.message || 'Login failed');
       }
@@ -92,20 +91,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const logout = async () => {
     try {
-      // Make a logout request to clear server-side session
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008'}/api/admin/logout`, {
-        method: 'POST',
-        credentials: 'include'
-      });
-    } catch (err) {
-      console.error('Logout request failed:', err);
-    }
-    
+      await apiService.logout();
+    } catch {}
+    setToken(null);
+    sessionStorage.removeItem('admin_info');
     setIsAuthenticated(false);
     setAdmin(null);
     setError(null);
-    // Redirect to login page after logout
-    window.location.href = '/login';
   };
 
   const clearError = () => {

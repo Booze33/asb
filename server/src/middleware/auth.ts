@@ -14,7 +14,7 @@ export const authenticateAdmin = (req: AuthenticatedRequest, res: Response, next
   const authHeader = req.headers['authorization'];
   let token = jwtService.extractTokenFromHeader(authHeader);
 
-  console.log('=======================================check token 1:', req);
+  console.log('=======================================check token 1:', authHeader);
   
 
   // If no token in header, try to get from cookies (for browser requests)

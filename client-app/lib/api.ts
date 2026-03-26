@@ -1,3 +1,5 @@
+import { getToken } from './token';
+
 export interface LoginCredentials {
   email: string;
   password: string;
@@ -7,6 +9,7 @@ export interface LoginResponse {
   success: boolean;
   message: string;
   data: {
+    token: string;
     admin: {
       id: number;
       name: string;
@@ -100,38 +103,26 @@ class ApiService {
   private baseURL: string;
 
   constructor() {
-    // In development, we'll use the server port 3008
-    // In production, this would be the actual API URL
     this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
   }
 
-  private getTokenFromCookies(): string | null {
-    if (typeof document === 'undefined') return null;
-
-    const match = document.cookie
-      .split('; ')
-      .find((row) => row.startsWith('admin_token='));
-
-    if (!match) return null;
-    return decodeURIComponent(match.split('=')[1] || '');
-  }
-
-  private getHeaders(): HeadersInit {
-    const token = this.getTokenFromCookies();
-
-    return {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  private getHeaders(authenticated = false): HeadersInit {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
+    if (authenticated) {
+      const token = getToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
   }
 
   private async handleResponse<T>(response: Response): Promise<T> {
     const contentType = response.headers.get('content-type');
-    const isJson = contentType && contentType.includes('application/json');
+    const isJson = contentType?.includes('application/json');
 
     if (!response.ok) {
       let errorMessage = 'An error occurred';
-      
       if (isJson) {
         try {
           const errorData = await response.json();
@@ -142,7 +133,6 @@ class ApiService {
       } else {
         errorMessage = response.statusText || 'An error occurred';
       }
-
       throw new Error(errorMessage);
     }
 
@@ -150,22 +140,15 @@ class ApiService {
       return {} as T;
     }
 
-    if (isJson) {
-      return response.json();
-    }
-
-    return response.text() as unknown as T;
+    return isJson ? response.json() : response.text() as unknown as T;
   }
 
-  // Authentication endpoints
   async login(credentials: LoginCredentials): Promise<LoginResponse> {
     const response = await fetch(`${this.baseURL}/api/admin/login`, {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: this.getHeaders(),         // no auth needed for login
       body: JSON.stringify(credentials),
-      credentials: 'include',
     });
-
     return this.handleResponse<LoginResponse>(response);
   }
 
@@ -174,108 +157,63 @@ class ApiService {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(request),
-      credentials: 'include',
     });
-
     return this.handleResponse<ForgotPasswordResponse>(response);
-  }
-
-  // Admin endpoints
-  async getAdminProfile(): Promise<AdminResponse> {
-    const response = await fetch(`${this.baseURL}/api/admin/profile`, {
-      method: 'GET',
-      headers: this.getHeaders(),
-      credentials: 'include',
-    });
-
-    return this.handleResponse<AdminResponse>(response);
   }
 
   async logout(): Promise<{ success: boolean; message: string }> {
     const response = await fetch(`${this.baseURL}/api/admin/logout`, {
       method: 'POST',
-      headers: this.getHeaders(),
-      credentials: 'include',
+      headers: this.getHeaders(true),     // sends Bearer token
     });
-
     return this.handleResponse<{ success: boolean; message: string }>(response);
   }
 
-  // Dashboard endpoints
-  async getDashboard(page: number = 1, limit: number = 10, filters?: DashboardFilters): Promise<DashboardResponse> {
-    const params = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString(),
-    });
+  async getDashboard(page = 1, limit = 10, filters?: DashboardFilters): Promise<DashboardResponse> {
+    const params = new URLSearchParams({ page: page.toString(), limit: limit.toString() });
+    if (filters?.status) params.append('status', filters.status);
+    if (filters?.start_date) params.append('start_date', filters.start_date);
+    if (filters?.end_date) params.append('end_date', filters.end_date);
 
-    if (filters?.status) {
-      params.append('status', filters.status);
-    }
-    if (filters?.start_date) {
-      params.append('start_date', filters.start_date);
-    }
-    if (filters?.end_date) {
-      params.append('end_date', filters.end_date);
-    }
-
-    const response = await fetch(`${this.baseURL}/api/admin/dashboard?${params.toString()}`, {
+    const response = await fetch(`${this.baseURL}/api/admin/dashboard?${params}`, {
       method: 'GET',
-      headers: this.getHeaders(),
-      credentials: 'include',
+      headers: this.getHeaders(true),     // sends Bearer token
     });
-
     return this.handleResponse<DashboardResponse>(response);
   }
 
-  // Appointment management endpoints
   async createAppointment(data: CreateAppointmentRequest): Promise<CreateAppointmentResponse> {
     const response = await fetch(`${this.baseURL}/api/appointments`, {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: this.getHeaders(),         // public endpoint
       body: JSON.stringify(data),
-      credentials: 'include',
     });
-
     return this.handleResponse<CreateAppointmentResponse>(response);
   }
 
   async getAppointment(id: number, email: string): Promise<{ success: boolean; data: Appointment }> {
-    const response = await fetch(`${this.baseURL}/api/appointments/${id}?email=${encodeURIComponent(email)}`, {
-      method: 'GET',
-      headers: this.getHeaders(),
-      credentials: 'include',
-    });
-
+    const response = await fetch(
+      `${this.baseURL}/api/appointments/${id}?email=${encodeURIComponent(email)}`,
+      { method: 'GET', headers: this.getHeaders() }
+    );
     return this.handleResponse<{ success: boolean; data: Appointment }>(response);
   }
 
   async updateAppointment(id: number, data: UpdateAppointmentRequest): Promise<UpdateAppointmentResponse> {
     const response = await fetch(`${this.baseURL}/api/admin/appointments/${id}`, {
       method: 'PUT',
-      headers: this.getHeaders(),
+      headers: this.getHeaders(true),
       body: JSON.stringify(data),
-      credentials: 'include',
     });
-
     return this.handleResponse<UpdateAppointmentResponse>(response);
   }
 
   async cancelAppointment(id: number): Promise<{ success: boolean; message: string }> {
     const response = await fetch(`${this.baseURL}/api/admin/appointments/${id}`, {
       method: 'DELETE',
-      headers: this.getHeaders(),
-      credentials: 'include',
+      headers: this.getHeaders(true),
     });
-
     return this.handleResponse<{ success: boolean; message: string }>(response);
-  }
-
-  // Utility methods
-  isAuthenticated(): boolean {
-    // For cookie-based auth, we need to check if we have a valid session
-    // This is typically done by making a request to a protected endpoint
-    // or checking for the presence of auth cookies
-    return true; // This will be handled by the server-side session
   }
 }
 
@@ -299,12 +237,13 @@ export interface CacheHealth {
 // Cache endpoints
 export async function getCacheStats(): Promise<{ success: boolean; data: CacheStats }> {
   const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const token = getToken();
   const response = await fetch(`${baseURL}/api/cache/stats`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     },
-    credentials: 'include',
   });
   
   const contentType = response.headers.get('content-type');
@@ -340,12 +279,13 @@ export async function getCacheStats(): Promise<{ success: boolean; data: CacheSt
 
 export async function clearCache(): Promise<{ success: boolean; message: string }> {
   const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const token = getToken();
   const response = await fetch(`${baseURL}/api/cache/clear`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     },
-    credentials: 'include',
   });
   
   const contentType = response.headers.get('content-type');
@@ -381,13 +321,14 @@ export async function clearCache(): Promise<{ success: boolean; message: string 
 
 export async function invalidateCache(pattern: string): Promise<{ success: boolean; message: string }> {
   const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const token = getToken();
   const response = await fetch(`${baseURL}/api/cache/invalidate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ pattern }),
-    credentials: 'include',
   });
   
   const contentType = response.headers.get('content-type');
@@ -423,12 +364,13 @@ export async function invalidateCache(pattern: string): Promise<{ success: boole
 
 export async function getCacheHealth(): Promise<{ success: boolean; data: CacheHealth }> {
   const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const token = getToken();
   const response = await fetch(`${baseURL}/api/cache/health`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     },
-    credentials: 'include',
   });
   
   const contentType = response.headers.get('content-type');
@@ -470,7 +412,6 @@ export async function getHealth(): Promise<{ status: string; timestamp: string; 
     headers: {
       'Content-Type': 'application/json',
     },
-    credentials: 'include',
   });
   
   const contentType = response.headers.get('content-type');
@@ -511,7 +452,6 @@ export async function getReadiness(): Promise<{ status: string; timestamp: strin
     headers: {
       'Content-Type': 'application/json',
     },
-    credentials: 'include',
   });
   
   const contentType = response.headers.get('content-type');
@@ -552,7 +492,6 @@ export async function getLiveness(): Promise<{ status: string; timestamp: string
     headers: {
       'Content-Type': 'application/json',
     },
-    credentials: 'include',
   });
   
   const contentType = response.headers.get('content-type');

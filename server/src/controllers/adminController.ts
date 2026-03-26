@@ -56,10 +56,12 @@ export class AdminController {
         role: admin.role
       });
 
+      const isCrossSiteAuth = process.env.CROSS_SITE_AUTH === 'true';
+
       res.cookie('admin_token', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+        secure: process.env.NODE_ENV === 'production' || isCrossSiteAuth,
+        sameSite: isCrossSiteAuth ? 'none' : (process.env.NODE_ENV === 'production' ? 'strict' : 'lax'),
         maxAge: 24 * 60 * 60 * 1000,
         path: '/'
       });
@@ -70,6 +72,7 @@ export class AdminController {
         success: true,
         message: 'Login successful',
         data: {
+          token,
           admin: {
             id: admin.id,
             name: admin.name,

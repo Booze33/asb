@@ -1,1782 +1,2859 @@
-###client/lib/api.ts
-```
-export interface LoginCredentials {
-  email: string;
-  password: string;
+###server/package.json
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "migrate": "node src/migrate.js",
+    "start-with-migrate": "npm run migrate && npm start",
+    "dev-with-migrate": "npm run migrate && npm run dev",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write src/**/*.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@bull-board/api": "^6.20.5",
+    "@bull-board/express": "^6.20.5",
+    "bcrypt": "^6.0.0",
+    "bull": "^4.16.5",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.1",
+    "helmet": "^8.1.0",
+    "joi": "^18.0.2",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.10.1",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.2",
+    "pg": "^8.20.0",
+    "twilio": "^5.13.0",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/bull": "^3.15.9",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/helmet": "^0.0.48",
+    "@types/jest": "^30.0.0",
+    "@types/joi": "^17.2.2",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^25.5.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^7.0.11",
+    "@types/pg": "^8.18.0",
+    "@types/supertest": "^7.2.0",
+    "@types/twilio": "^3.19.2",
+    "@types/uuid": "^10.0.0",
+    "@types/winston": "^2.4.4",
+    "@typescript-eslint/eslint-plugin": "^8.57.1",
+    "@typescript-eslint/parser": "^8.57.1",
+    "eslint": "^10.0.3",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "jest": "^30.3.0",
+    "prettier": "^3.8.1",
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.9.3"
+  }
 }
 
-export interface LoginResponse {
-  success: boolean;
-  message: string;
-  data: {
-    token: string;
-    admin: {
-      id: number;
-      name: string;
-      email: string;
-      role: string;
+###server/src/index.ts
+import app from './app';
+import { logger } from './config/logger';
+import pool from './config/database';
+import { emailQueue, whatsappQueue } from './jobs/queue';
+import { ReminderScheduler } from './jobs/reminderScheduler';
+import { queueMonitoring } from './jobs/monitoring';
+
+const PORT = process.env.PORT || 3000;
+
+async function startServer() {
+  try {
+    // Test database connection
+    await pool.connect();
+    logger.info('Database connected successfully');
+
+    // Start background jobs
+    logger.info('Starting background job processors...');
+
+    // Set up job event listeners for monitoring
+    emailQueue.on('completed', (job) => {
+      logger.info(`Email job ${job.id} completed`);
+    });
+
+    emailQueue.on('failed', (job, err) => {
+      logger.error(`Email job ${job.id} failed:`, err);
+    });
+
+    whatsappQueue.on('completed', (job) => {
+      logger.info(`WhatsApp job ${job.id} completed`);
+    });
+
+    whatsappQueue.on('failed', (job, err) => {
+      logger.error(`WhatsApp job ${job.id} failed:`, err);
+    });
+
+    logger.info('Background job processors started successfully');
+
+    const scheduler = await ReminderScheduler.create();
+
+    // Start the server
+    const server = app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+      logger.info(`Queue monitoring available at: http://localhost:${PORT}/bull-board`);
+    });
+
+    // Graceful shutdown
+    const shutdown = async () => {
+      logger.info('Shutting down gracefully');
+      await scheduler.shutdown();
+      server.close(() => {
+        pool.end(() => {
+          logger.info('Process terminated');
+          process.exit(0);
+        });
+      });
     };
+
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+
+  } catch (error) {
+    logger.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
+
+###server/src/app.ts
+import express from 'express';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import { logger, httpLogger } from './config/logger';
+import pool from './config/database';
+import healthRoutes from './routes/health';
+import appointmentRoutes from './routes/appointment';
+import adminRoutes from './routes/admin';
+import cacheRoutes from './routes/cache';
+import { queueMonitoring } from './jobs/monitoring';
+import { requestIdMiddleware } from './middleware/requestId';
+import { corsMiddleware, corsErrorHandler } from './middleware/cors';
+import { publicRateLimit, adminRateLimit, cacheRateLimit } from './middleware/rateLimit';
+
+const app = express();
+
+app.use(requestIdMiddleware);
+
+app.use(helmet());
+
+app.use(corsMiddleware);
+
+app.use(httpLogger);
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use(cookieParser());
+
+app.use('/health', publicRateLimit, healthRoutes);
+app.use('/api/appointments', publicRateLimit, appointmentRoutes);
+app.use('/api/admin', adminRateLimit, adminRoutes);
+app.use('/api/cache', cacheRateLimit, cacheRoutes);
+app.use('/bull-board', queueMonitoring.getRouter());
+
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  logger.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+export default app;
+
+###server/src/migrate.js
+import { Pool } from 'pg';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+// Fix for __dirname in ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+async function runMigrations() {
+  let retries = 30;
+
+  while (retries > 0) {
+    let client;
+    try {
+      console.log('Starting database migrations...');
+      client = await pool.connect();
+
+      console.log('Database connection established successfully');
+
+      const migrationsDir = path.join(__dirname, '../migrations');
+
+      if (!fs.existsSync(migrationsDir)) {
+        throw new Error(`Migrations directory not found at: ${migrationsDir}`);
+      }
+
+      const files = fs.readdirSync(migrationsDir)
+        .filter(f => f.endsWith('.sql'))
+        .sort();
+
+      for (const file of files) {
+        console.log(`Executing migration: ${file}`);
+        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+
+        // Wrap in a transaction so if one fails, it rolls back
+        await client.query('BEGIN');
+        await client.query(sql);
+        await client.query('COMMIT');
+
+        console.log(`Migration ${file} completed successfully`);
+      }
+
+      console.log('All migrations completed successfully');
+      return;
+    } catch (error) {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+
+      if (error.code === 'ECONNREFUSED' || error.message.includes('connection')) {
+        console.log(`Database not ready, waiting... (${retries} retries left)`);
+        retries--;
+        await new Promise(resolve => setTimeout(resolve, 10000));
+      } else {
+        console.error('Migration failed:', error.message);
+        process.exit(1);
+      }
+    } finally {
+      if (client) client.release();
+    }
+  }
+
+  console.error('Database connection timeout');
+  process.exit(1);
+}
+
+// The ES Module equivalent of: if (require.main === module)
+if (process.argv[1] === __filename) {
+  runMigrations().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+export { runMigrations };
+
+###server/src/config/database.ts
+import { Pool } from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+// Test the connection
+pool.on('connect', () => {
+  console.log('Connected to the database');
+});
+
+pool.on('error', (err) => {
+  console.error('Database connection error:', err);
+});
+
+export default pool;
+
+###server/src/config/cache.ts
+import Redis from 'ioredis';
+import { logger } from './logger';
+
+// Create a separate Redis client for caching (different from Bull's Redis connection)
+const cacheClient = new Redis({
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379'),
+  password: process.env.REDIS_PASSWORD,
+  db: parseInt(process.env.REDIS_CACHE_DB || '1'), // Use different DB for caching
+  lazyConnect: true,
+  keyPrefix: 'cache:',
+});
+
+// Handle Redis connection events
+cacheClient.on('connect', () => {
+  logger.info('Cache Redis client connected successfully');
+});
+
+cacheClient.on('error', (error) => {
+  logger.error('Cache Redis client error:', error);
+});
+
+cacheClient.on('close', () => {
+  logger.warn('Cache Redis client connection closed');
+});
+
+cacheClient.on('reconnecting', () => {
+  logger.info('Cache Redis client reconnecting...');
+});
+
+cacheClient.on('end', () => {
+  logger.warn('Cache Redis client connection ended');
+});
+
+// Cache configuration
+export const CACHE_CONFIG = {
+  DEFAULT_TTL: 60, // 1 minute in seconds
+  DASHBOARD_TTL: 60, // 1 minute for dashboard data
+  CLIENT_TTL: 300, // 5 minutes for client details
+  APPOINTMENT_TTL: 120, // 2 minutes for appointment details
+};
+
+// Cache key patterns
+export const CACHE_KEYS = {
+  DASHBOARD_UPCOMING: 'dashboard:upcoming',
+  DASHBOARD_STATS: 'dashboard:stats',
+  CLIENT_BY_EMAIL: (email: string) => `client:email:${email}`,
+  CLIENT_BY_PHONE: (phone: string) => `client:phone:${phone}`,
+  CLIENT_BY_ID: (id: number) => `client:id:${id}`,
+  APPOINTMENT_BY_ID: (id: number) => `appointment:id:${id}`,
+  APPOINTMENTS_BY_CLIENT: (clientId: number) => `appointments:client:${clientId}`,
+};
+
+/**
+ * Cache service for managing Redis cache operations
+ */
+export class CacheService {
+  private client: Redis;
+
+  constructor() {
+    this.client = cacheClient;
+  }
+
+  /**
+   * Get a value from cache
+   */
+  async get<T = any>(key: string): Promise<T | null> {
+    try {
+      const value = await this.client.get(key);
+      if (value) {
+        return JSON.parse(value);
+      }
+      return null;
+    } catch (error) {
+      logger.error(`Cache get error for key ${key}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Set a value in cache with TTL
+   */
+  async set(key: string, value: any, ttl: number = CACHE_CONFIG.DEFAULT_TTL): Promise<void> {
+    try {
+      const serializedValue = JSON.stringify(value);
+      await this.client.setex(key, ttl, serializedValue);
+    } catch (error) {
+      logger.error(`Cache set error for key ${key}:`, error);
+    }
+  }
+
+  /**
+   * Delete a key from cache
+   */
+  async del(key: string): Promise<void> {
+    try {
+      await this.client.del(key);
+    } catch (error) {
+      logger.error(`Cache delete error for key ${key}:`, error);
+    }
+  }
+
+  /**
+   * Delete multiple keys from cache
+   */
+  async delMultiple(keys: string[]): Promise<void> {
+    try {
+      if (keys.length > 0) {
+        await this.client.del(...keys);
+      }
+    } catch (error) {
+      logger.error('Cache delete multiple error:', error);
+    }
+  }
+
+  /**
+   * Check if a key exists in cache
+   */
+  async exists(key: string): Promise<boolean> {
+    try {
+      const result = await this.client.exists(key);
+      return result === 1;
+    } catch (error) {
+      logger.error(`Cache exists error for key ${key}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Get multiple values from cache
+   */
+  async mget<T = any>(keys: string[]): Promise<(T | null)[]> {
+    try {
+      const values = await this.client.mget(...keys);
+      return values.map(value => value ? JSON.parse(value) : null);
+    } catch (error) {
+      logger.error('Cache mget error:', error);
+      return keys.map(() => null);
+    }
+  }
+
+  /**
+   * Set multiple values in cache
+   */
+  async mset(keyValuePairs: { key: string; value: any; ttl?: number }[]): Promise<void> {
+    try {
+      const pipeline = this.client.pipeline();
+
+      for (const { key, value, ttl = CACHE_CONFIG.DEFAULT_TTL } of keyValuePairs) {
+        const serializedValue = JSON.stringify(value);
+        pipeline.setex(key, ttl, serializedValue);
+      }
+
+      await pipeline.exec();
+    } catch (error) {
+      logger.error('Cache mset error:', error);
+    }
+  }
+
+  /**
+   * Invalidate cache keys matching a pattern
+   */
+  async invalidatePattern(pattern: string): Promise<void> {
+    try {
+      const keys = await this.client.keys(pattern);
+      if (keys.length > 0) {
+        await this.client.del(...keys);
+      }
+    } catch (error) {
+      logger.error(`Cache invalidate pattern error for pattern ${pattern}:`, error);
+    }
+  }
+
+  /**
+   * Get cache statistics
+   */
+  async getStats(): Promise<{ connected: boolean; keyCount: number; memoryUsage: string }> {
+    try {
+      const info = await this.client.info('memory');
+      const keyCount = await this.client.dbsize();
+
+      // Parse memory info
+      const memoryMatch = info.match(/used_memory_human:(\d+\.\d+\w+)/);
+      const memoryUsage = memoryMatch ? memoryMatch[1] : 'unknown';
+
+      return {
+        connected: this.client.status === 'ready',
+        keyCount,
+        memoryUsage
+      };
+    } catch (error) {
+      logger.error('Cache stats error:', error);
+      return {
+        connected: false,
+        keyCount: 0,
+        memoryUsage: 'unknown'
+      };
+    }
+  }
+
+  /**
+   * Clear all cache (use with caution)
+   */
+  async clear(): Promise<void> {
+    try {
+      await this.client.flushdb();
+      logger.info('Cache cleared successfully');
+    } catch (error) {
+      logger.error('Cache clear error:', error);
+    }
+  }
+
+  /**
+   * Close Redis connection
+   */
+  async disconnect(): Promise<void> {
+    try {
+      await this.client.quit();
+      logger.info('Cache Redis client disconnected');
+    } catch (error) {
+      logger.error('Cache disconnect error:', error);
+    }
+  }
+}
+
+// Export singleton instance
+export const cacheService = new CacheService();
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  await cacheService.disconnect();
+});
+
+process.on('SIGINT', async () => {
+  await cacheService.disconnect();
+});
+
+export default cacheService;
+
+###server/src/controllers/adminController.ts
+import { Request, Response } from 'express';
+import { PoolClient } from 'pg';
+import { AdminModel } from '../models/Admin';
+import { AppointmentModel, AppointmentWithClient } from '../models/Appointment';
+import { jwtService } from '../services/jwtService';
+import { emailQueue } from '../jobs/queue';
+import { logger } from '../config/logger';
+import { cacheService, CACHE_KEYS, CACHE_CONFIG } from '../config/cache';
+import { adminLoginSchema, updateAppointmentSchema, dashboardQuerySchema, forgotPasswordSchema } from '../utils/validationSchemas';
+
+export class AdminController {
+  private adminModel: AdminModel;
+  private appointmentModel: AppointmentModel;
+
+  constructor(db: PoolClient) {
+    this.adminModel = new AdminModel(db);
+    this.appointmentModel = new AppointmentModel(db);
+  }
+
+  async login(req: Request, res: Response): Promise<void> {
+    try {
+      const { error, value } = adminLoginSchema.validate(req.body);
+
+      if (error) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: error.details.map(detail => detail.message)
+        });
+        return;
+      }
+
+      const { email, password } = value;
+
+      const admin = await this.adminModel.findByEmail(email);
+      if (!admin) {
+        res.status(401).json({
+          success: false,
+          message: 'Invalid credentials'
+        });
+        return;
+      }
+
+      const isValidPassword = await this.adminModel.verifyPassword(password, admin.password_hash);
+      if (!isValidPassword) {
+        res.status(401).json({
+          success: false,
+          message: 'Invalid credentials'
+        });
+        return;
+      }
+
+      const token = jwtService.generateToken({
+        id: admin.id,
+        email: admin.email,
+        role: admin.role
+      });
+
+      const isCrossSiteAuth = process.env.CROSS_SITE_AUTH === 'true';
+
+      res.cookie('admin_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production' || isCrossSiteAuth,
+        sameSite: isCrossSiteAuth ? 'none' : (process.env.NODE_ENV === 'production' ? 'strict' : 'lax'),
+        maxAge: 24 * 60 * 60 * 1000,
+        path: '/'
+      });
+
+      logger.info(`Admin login successful: ${admin.id} - ${admin.email}`);
+
+      res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          token,
+          admin: {
+            id: admin.id,
+            name: admin.name,
+            email: admin.email,
+            role: admin.role
+          }
+        }
+      });
+
+    } catch (error) {
+      logger.error('Error in admin login:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  async getDashboard(req: Request, res: Response): Promise<void> {
+    try {
+      const { error, value } = dashboardQuerySchema.validate(req.query);
+      if (error) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: error.details.map(detail => detail.message)
+        });
+        return;
+      }
+
+      const { page, limit, status, start_date, end_date } = value;
+
+      const cacheKey = `${CACHE_KEYS.DASHBOARD_UPCOMING}:${page}:${limit}:${status || 'all'}:${start_date || 'all'}:${end_date || 'all'}`;
+
+      const cachedData = await cacheService.get(cacheKey);
+      if (cachedData) {
+        logger.info(`Dashboard data served from cache: ${cacheKey}`);
+        res.status(200).json({
+          success: true,
+          data: cachedData,
+          cached: true
+        });
+        return;
+      }
+
+      let query = `
+        SELECT a.*, c.name, c.email, c.phone, c.address
+        FROM appointments a
+        JOIN clients c ON a.client_id = c.id
+        WHERE 1=1
+      `;
+      const values: any[] = [];
+      let paramCount = 0;
+
+      if (status) {
+        paramCount++;
+        query += ` AND a.status = $${paramCount}`;
+        values.push(status);
+      }
+
+      if (start_date) {
+        paramCount++;
+        query += ` AND a.date_time >= $${paramCount}`;
+        values.push(start_date);
+      }
+
+      if (end_date) {
+        paramCount++;
+        query += ` AND a.date_time <= $${paramCount}`;
+        values.push(end_date);
+      }
+
+      query += ` ORDER BY a.date_time ASC`;
+
+      let countQuery = `
+        SELECT COUNT(*) 
+        FROM appointments a
+        JOIN clients c ON a.client_id = c.id
+        WHERE 1=1
+      `;
+      const countValues: any[] = [];
+      let countParamCount = 0;
+
+      if (status) {
+        countParamCount++;
+        countQuery += ` AND a.status = $${countParamCount}`;
+        countValues.push(status);
+      }
+
+      if (start_date) {
+        countParamCount++;
+        countQuery += ` AND a.date_time >= $${countParamCount}`;
+        countValues.push(start_date);
+      }
+
+      if (end_date) {
+        countParamCount++;
+        countQuery += ` AND a.date_time <= $${countParamCount}`;
+        countValues.push(end_date);
+      }
+
+      const countResult = await this.adminModel.db.query(countQuery, countValues);
+      const total = parseInt(countResult.rows[0].count, 10);
+
+      const offset = (page - 1) * limit;
+      paramCount++;
+      query += ` LIMIT $${paramCount}`;
+      values.push(limit);
+
+      paramCount++;
+      query += ` OFFSET $${paramCount}`;
+      values.push(offset);
+
+      const result = await this.adminModel.db.query(query, values);
+      const appointments = result.rows;
+
+      const responseData = {
+        appointments,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      };
+
+      await cacheService.set(cacheKey, responseData, CACHE_CONFIG.DASHBOARD_TTL);
+
+      res.status(200).json({
+        success: true,
+        data: responseData,
+        cached: false
+      });
+
+    } catch (error) {
+      logger.error('Error retrieving dashboard:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  async updateAppointment(req: Request, res: Response): Promise<void> {
+    try {
+      const adminId = (req as any).user?.id || 'unknown';
+      const appointmentId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+
+      if (isNaN(appointmentId)) {
+        res.status(400).json({
+          success: false,
+          message: 'Invalid appointment ID'
+        });
+        return;
+      }
+
+      const { error, value } = updateAppointmentSchema.validate(req.body);
+      if (error) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: error.details.map(detail => detail.message)
+        });
+        return;
+      }
+
+      const currentAppointment = await this.appointmentModel.findById(appointmentId) as AppointmentWithClient;
+      if (!currentAppointment) {
+        res.status(404).json({
+          success: false,
+          message: 'Appointment not found'
+        });
+        return;
+      }
+
+      if (value.status) {
+        const isValidTransition = this.validateStatusTransition(currentAppointment.status, value.status);
+        if (!isValidTransition) {
+          res.status(400).json({
+            success: false,
+            message: 'Invalid status transition',
+            errors: [`Cannot transition from ${currentAppointment.status} to ${value.status}`]
+          });
+          return;
+        }
+      }
+
+      if (value.date_time) {
+        const duration = value.duration || 60; // Default to 60 minutes if not provided
+        const existingAppointment = await this.appointmentModel.findByDateTime(new Date(value.date_time), duration);
+        if (existingAppointment && existingAppointment.id !== appointmentId) {
+          res.status(409).json({
+            success: false,
+            message: 'This time slot is already booked. Please choose a different time.'
+          });
+          return;
+        }
+      }
+
+      let updateQuery = 'UPDATE appointments SET ';
+      const updateValues: any[] = [];
+      let paramCount = 0;
+      const fieldsToUpdate: string[] = [];
+
+      if (value.date_time) {
+        paramCount++;
+        fieldsToUpdate.push(`date_time = $${paramCount}`);
+        updateValues.push(new Date(value.date_time));
+      }
+
+      if (value.duration) {
+        paramCount++;
+        fieldsToUpdate.push(`duration = $${paramCount}`);
+        updateValues.push(value.duration);
+      }
+
+      if (value.status) {
+        paramCount++;
+        fieldsToUpdate.push(`status = $${paramCount}`);
+        updateValues.push(value.status);
+      }
+
+      if (fieldsToUpdate.length === 0) {
+        res.status(400).json({
+          success: false,
+          message: 'No fields to update'
+        });
+        return;
+      }
+
+      updateQuery += fieldsToUpdate.join(', ');
+      updateQuery += ` WHERE id = $${paramCount + 1} RETURNING *`;
+      updateValues.push(appointmentId);
+
+      const result = await this.adminModel.db.query(updateQuery, updateValues);
+      const updatedAppointment = result.rows[0] as AppointmentWithClient;
+
+      if (value.status) {
+        await this.handleStatusChangeNotifications(currentAppointment, updatedAppointment);
+      }
+
+      if (value.date_time) {
+        await this.handleReminderJobManagement(currentAppointment, updatedAppointment);
+      }
+
+      await this.invalidateDashboardCache();
+
+      logger.info(`Appointment updated: ${updatedAppointment.id} by admin: ${adminId}`);
+
+      res.status(200).json({
+        success: true,
+        message: 'Appointment updated successfully',
+        data: {
+          appointment: updatedAppointment
+        }
+      });
+
+    } catch (error) {
+      logger.error('Error updating appointment:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  async deleteAppointment(req: Request, res: Response): Promise<void> {
+    try {
+      const adminId = (req as any).user?.id || 'unknown';
+      const appointmentId = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+
+      if (isNaN(appointmentId)) {
+        res.status(400).json({
+          success: false,
+          message: 'Invalid appointment ID'
+        });
+        return;
+      }
+
+      const currentAppointment = await this.appointmentModel.findById(appointmentId) as AppointmentWithClient;
+      if (!currentAppointment) {
+        res.status(404).json({
+          success: false,
+          message: 'Appointment not found'
+        });
+        return;
+      }
+
+      const updateQuery = `
+        UPDATE appointments
+        SET status = 'cancelled'
+        WHERE id = $1
+        RETURNING *
+      `;
+      const result = await this.adminModel.db.query(updateQuery, [appointmentId]);
+      const cancelledAppointment = result.rows[0];
+
+      await this.handleStatusChangeNotifications(currentAppointment, cancelledAppointment);
+
+      await this.invalidateDashboardCache();
+
+      logger.info(`Appointment cancelled: ${cancelledAppointment.id} by admin: ${adminId}`);
+
+      res.status(200).json({
+        success: true,
+        message: 'Appointment cancelled successfully',
+        data: {
+          appointment: cancelledAppointment
+        }
+      });
+
+    } catch (error) {
+      logger.error('Error cancelling appointment:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  async forgotPassword(req: Request, res: Response): Promise<void> {
+    try {
+      const { error, value } = forgotPasswordSchema.validate(req.body);
+      if (error) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: error.details.map(detail => detail.message)
+        });
+        return;
+      }
+
+      const { email } = value;
+
+      const admin = await this.adminModel.findByEmail(email);
+      if (!admin) {
+        res.status(200).json({
+          success: true,
+          message: 'If an account with that email exists, a password reset link has been sent.'
+        });
+        return;
+      }
+
+      const resetToken = jwtService.generateResetToken({
+        id: admin.id,
+        email: admin.email
+      });
+
+      const frontendUrl = process.env.FRONTEND_URL;
+      if (!frontendUrl) {
+        logger.error('FRONTEND_URL environment variable is not set');
+        throw new Error('FRONTEND_URL environment variable is required for password reset functionality');
+      }
+
+      await emailQueue.add('send email', {
+        to: admin.email,
+        subject: 'Password Reset Request',
+        text: `Hello ${admin.name},\n\nYou requested a password reset for your admin account.\n\nPlease click the link below to reset your password:\n\n${frontendUrl}/reset-password?token=${resetToken}\n\nThis link will expire in 1 hour.\n\nIf you did not request this reset, please ignore this email.\n\nThank you!`,
+        html: `<p>Hello ${admin.name},</p><p>You requested a password reset for your admin account.</p><p>Please click the link below to reset your password:</p><p><a href="${frontendUrl}/reset-password?token=${resetToken}">Reset Password</a></p><p>This link will expire in 1 hour.</p><p>If you did not request this reset, please ignore this email.</p><p>Thank you!</p>`
+      });
+
+      logger.info(`Password reset requested for admin: ${admin.id} - ${admin.email}`);
+
+      res.status(200).json({
+        success: true,
+        message: 'If an account with that email exists, a password reset link has been sent.'
+      });
+
+    } catch (error) {
+      logger.error('Error in forgot password:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  private validateStatusTransition(currentStatus: string, newStatus: string): boolean {
+    const validTransitions: Record<string, string[]> = {
+      'booked': ['confirmed', 'cancelled', 'completed', 'missed'],
+      'confirmed': ['cancelled', 'completed', 'missed'],
+      'cancelled': [],
+      'completed': [],
+      'missed': []
+    };
+
+    return validTransitions[currentStatus]?.includes(newStatus) || false;
+  }
+
+  private async handleStatusChangeNotifications(oldAppointment: any, newAppointment: any): Promise<void> {
+    if (oldAppointment.status === newAppointment.status) {
+      return;
+    }
+
+    const clientEmail = oldAppointment.email;
+    const clientName = oldAppointment.name;
+
+    if (newAppointment.status === 'cancelled') {
+      await emailQueue.add('send email', {
+        to: clientEmail,
+        subject: 'Appointment Cancelled',
+        text: `Hello ${clientName},\n\nYour appointment scheduled for ${new Date(oldAppointment.date_time).toLocaleString()} has been cancelled.\n\nWe apologize for any inconvenience. Please contact us to reschedule.\n\nThank you!`,
+        html: `<p>Hello ${clientName},</p><p>Your appointment scheduled for ${new Date(oldAppointment.date_time).toLocaleString()} has been cancelled.</p><p>We apologize for any inconvenience. Please contact us to reschedule.</p><p>Thank you!</p>`
+      });
+    } else if (newAppointment.status === 'completed') {
+      await emailQueue.add('send email', {
+        to: clientEmail,
+        subject: 'Appointment Completed',
+        text: `Hello ${clientName},\n\nYour appointment scheduled for ${new Date(oldAppointment.date_time).toLocaleString()} has been completed successfully.\n\nThank you for choosing our services!\n\nWe look forward to serving you again soon.`,
+        html: `<p>Hello ${clientName},</p><p>Your appointment scheduled for ${new Date(oldAppointment.date_time).toLocaleString()} has been completed successfully.</p><p>Thank you for choosing our services!</p><p>We look forward to serving you again soon.</p>`
+      });
+    } else if (newAppointment.status === 'missed') {
+      await emailQueue.add('send email', {
+        to: clientEmail,
+        subject: 'Missed Appointment',
+        text: `Hello ${clientName},\n\nWe noticed you missed your appointment scheduled for ${new Date(oldAppointment.date_time).toLocaleString()}.\n\nIf you would like to reschedule, please contact us.\n\nThank you!`,
+        html: `<p>Hello ${clientName},</p><p>We noticed you missed your appointment scheduled for ${new Date(oldAppointment.date_time).toLocaleString()}.</p><p>If you would like to reschedule, please contact us.</p><p>Thank you!</p>`
+      });
+    }
+  }
+
+  private async handleReminderJobManagement(oldAppointment: any, newAppointment: any): Promise<void> {
+    // This would integrate with the reminder job system
+    // For now, we'll log the action
+    if (oldAppointment.date_time !== newAppointment.date_time) {
+      logger.info(`Appointment rescheduled: ${newAppointment.id}, old time: ${oldAppointment.date_time}, new time: ${newAppointment.date_time}`);
+      // In a full implementation, this would:
+      // 1. Cancel existing reminder jobs for the old time
+      // 2. Schedule new reminder jobs for the new time
+    }
+  }
+
+  private async invalidateDashboardCache(): Promise<void> {
+    try {
+      // Invalidate all dashboard cache keys
+      await cacheService.invalidatePattern(`${CACHE_KEYS.DASHBOARD_UPCOMING}:*`);
+      logger.info('Dashboard cache invalidated');
+    } catch (error) {
+      logger.error('Error invalidating dashboard cache:', error);
+    }
+  }
+}
+
+###server/src/controllers/appointmentController.ts
+import { Request, Response } from 'express';
+import { PoolClient } from 'pg';
+import { ClientModel } from '../models/Client';
+import { AppointmentModel } from '../models/Appointment';
+import { emailQueue, notificationQueue } from '../jobs/queue';
+import { logger } from '../config/logger';
+import { cacheService, CACHE_KEYS, CACHE_CONFIG } from '../config/cache';
+import { createAppointmentSchema, getAppointmentSchema } from '../utils/validationSchemas';
+
+export class AppointmentController {
+  private clientModel: ClientModel;
+  private appointmentModel: AppointmentModel;
+
+  constructor(db: PoolClient) {
+    this.clientModel = new ClientModel(db);
+    this.appointmentModel = new AppointmentModel(db);
+  }
+
+  async createAppointment(req: Request, res: Response): Promise<void> {
+    try {
+      // Validate input
+      const { error, value } = createAppointmentSchema.validate(req.body);
+      console.log('Received appointment data error:', error);
+      if (error) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: error.details.map(detail => detail.message)
+        });
+        return;
+      }
+
+      const { name, email, phone, address, date_time, duration, service } = value;
+
+      // Check for double booking
+      const existingAppointment = await this.appointmentModel.findByDateTime(new Date(date_time), duration);
+      if (existingAppointment) {
+        res.status(409).json({
+          success: false,
+          message: 'This time slot is already booked. Please choose a different time.'
+        });
+        return;
+      }
+
+      // Check if client exists with caching
+      let client = null;
+
+      // Try to get client from cache first
+      try {
+        if (email) {
+          const cachedClient = await cacheService.get(CACHE_KEYS.CLIENT_BY_EMAIL(email));
+          if (cachedClient) {
+            client = cachedClient;
+            logger.info(`Client found in cache: ${client.id} - ${client.name}`);
+          }
+        }
+
+        if (!client && phone) {
+          const cachedClient = await cacheService.get(CACHE_KEYS.CLIENT_BY_PHONE(phone));
+          if (cachedClient) {
+            client = cachedClient;
+            logger.info(`Client found in cache: ${client.id} - ${client.name}`);
+          }
+        }
+      } catch (cacheError) {
+        logger.warn('Cache lookup failed, proceeding without cache:', cacheError);
+      }
+
+      if (!client) {
+        // Check database
+        client = await this.clientModel.findByEmailOrPhone(email, phone);
+
+        if (client) {
+          // Try to cache the found client
+          try {
+            await this.cacheClient(client);
+            logger.info(`Client found in database and cached: ${client.id} - ${client.name}`);
+          } catch (cacheError) {
+            logger.warn(`Failed to cache client ${client.id}:`, cacheError);
+          }
+        }
+      }
+
+      if (!client) {
+        // Create new client
+        client = await this.clientModel.create({
+          name,
+          email,
+          phone,
+          address
+        });
+
+        // Try to cache the new client
+        try {
+          await this.cacheClient(client);
+          logger.info(`Created new client and cached: ${client.id} - ${client.name}`);
+        } catch (cacheError) {
+          logger.warn(`Failed to cache new client ${client.id}:`, cacheError);
+        }
+      }
+
+      // Create appointment
+      const appointment = await this.appointmentModel.create({
+        client_id: client.id,
+        service: service || 'General Appointment',
+        date_time: new Date(date_time),
+        duration,
+        status: 'booked'
+      });
+
+      // Try to enqueue confirmation notification using unified notification service
+      try {
+        await notificationQueue.add('send notification', {
+          appointmentId: appointment.id,
+          clientId: client.id,
+          clientName: client.name,
+          clientEmail: client.email,
+          clientPhone: client.phone,
+          appointmentTime: appointment.date_time,
+          duration: appointment.duration,
+          type: 'confirmation',
+          channel: 'email'
+        });
+
+        // Also send WhatsApp notification if phone number exists
+        if (client.phone) {
+          await notificationQueue.add('send notification', {
+            appointmentId: appointment.id,
+            clientId: client.id,
+            clientName: client.name,
+            clientEmail: client.email,
+            clientPhone: client.phone,
+            appointmentTime: appointment.date_time,
+            duration: appointment.duration,
+            type: 'confirmation',
+            channel: 'whatsapp'
+          });
+        }
+        logger.info(`Notification jobs enqueued for appointment: ${appointment.id}`);
+      } catch (notificationError) {
+        logger.warn(`Failed to enqueue notification for appointment ${appointment.id}:`, notificationError);
+        // Continue with the appointment creation even if notifications fail
+      }
+
+      logger.info(`Created appointment: ${appointment.id} for client: ${client.id}`);
+
+      res.status(201).json({
+        success: true,
+        message: 'Appointment created successfully',
+        data: {
+          appointment: {
+            id: appointment.id,
+            date_time: appointment.date_time,
+            duration: appointment.duration,
+            status: appointment.status,
+            client: {
+              id: client.id,
+              name: client.name,
+              email: client.email,
+              phone: client.phone,
+              address: client.address
+            }
+          }
+        }
+      });
+
+    } catch (error) {
+      logger.error('Error creating appointment:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  async getAppointment(req: Request, res: Response): Promise<void> {
+    try {
+      const rawEmail = req.query.email;
+
+      if (!rawEmail || Array.isArray(rawEmail)) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: ['email must be a single string query parameter']
+        });
+        return;
+      }
+
+      const email = rawEmail as string;
+      const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+
+      if (isNaN(id)) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: ['Appointment ID must be a valid number']
+        });
+        return;
+      }
+
+      // Validate input
+      const { error, value } = getAppointmentSchema.validate({ id, email });
+
+      if (error) {
+        res.status(400).json({
+          success: false,
+          message: 'Validation error',
+          errors: error.details.map(detail => detail.message)
+        });
+        return;
+      }
+
+      const appointment = await this.appointmentModel.findById(id);
+
+      if (!appointment) {
+        res.status(404).json({
+          success: false,
+          message: 'Appointment not found'
+        });
+        return;
+      }
+
+      // Verify client owns this appointment
+      if (appointment.email !== email) {
+        res.status(403).json({
+          success: false,
+          message: 'Access denied: This appointment does not belong to the provided email'
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          appointment: {
+            id: appointment.id,
+            date_time: appointment.date_time,
+            duration: appointment.duration,
+            status: appointment.status,
+            client: {
+              id: appointment.client_id,
+              name: appointment.name,
+              email: appointment.email,
+              phone: appointment.phone,
+              address: appointment.address
+            }
+          }
+        }
+      });
+
+    } catch (error) {
+      logger.error('Error retrieving appointment:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  }
+
+  /**
+   * Cache client details for frequent lookups
+   */
+  private async cacheClient(client: any): Promise<void> {
+    try {
+      const clientData = {
+        id: client.id,
+        name: client.name,
+        email: client.email,
+        phone: client.phone,
+        address: client.address
+      };
+
+      // Cache by email if available
+      if (client.email) {
+        await cacheService.set(CACHE_KEYS.CLIENT_BY_EMAIL(client.email), clientData, CACHE_CONFIG.CLIENT_TTL);
+      }
+
+      // Cache by phone if available
+      if (client.phone) {
+        await cacheService.set(CACHE_KEYS.CLIENT_BY_PHONE(client.phone), clientData, CACHE_CONFIG.CLIENT_TTL);
+      }
+
+      // Cache by ID
+      await cacheService.set(CACHE_KEYS.CLIENT_BY_ID(client.id), clientData, CACHE_CONFIG.CLIENT_TTL);
+
+      logger.info(`Client cached: ${client.id} - ${client.name}`);
+    } catch (error) {
+      logger.error('Error caching client:', error);
+    }
+  }
+}
+
+###server/src/routes/admin.ts
+import { Router } from 'express';
+import { PoolClient } from 'pg';
+import { AdminController } from '../controllers/adminController';
+import pool from '../config/database';
+import { authenticateAdmin, requireAdminRole, AuthenticatedRequest } from '../middleware/auth';
+import { logger } from '../config/logger';
+import { validateInput } from '../middleware/validation';
+import { authRateLimit } from '../middleware/rateLimit';
+import { adminLoginSchema, dashboardQuerySchema, updateAppointmentSchema, forgotPasswordSchema } from '../utils/validationSchemas';
+
+const router = Router();
+
+router.post('/login', authRateLimit, async (req, res) => {
+  let client;
+  try {
+    client = await pool.connect();
+    const controller = new AdminController(client);
+    await controller.login(req, res);
+  } catch (error) {
+    logger.error('Error in admin login route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+router.get('/dashboard', authenticateAdmin, requireAdminRole, async (req, res) => {
+  let client;
+  try {
+    client = await pool.connect();
+    const controller = new AdminController(client);
+    await controller.getDashboard(req, res);
+  } catch (error) {
+    logger.error('Error in admin dashboard route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+router.put('/appointments/:id', authenticateAdmin, requireAdminRole, async (req, res) => {
+  let client;
+  try {
+    client = await pool.connect();
+    const controller = new AdminController(client);
+    await controller.updateAppointment(req, res);
+  } catch (error) {
+    logger.error('Error in update appointment route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+router.delete('/appointments/:id', authenticateAdmin, requireAdminRole, async (req, res) => {
+  let client;
+  try {
+    client = await pool.connect();
+    const controller = new AdminController(client);
+    await controller.deleteAppointment(req, res);
+  } catch (error) {
+    logger.error('Error in cancel appointment route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+router.post('/forgot-password', async (req, res) => {
+  let client;
+  try {
+    client = await pool.connect();
+    const controller = new AdminController(client);
+    await controller.forgotPassword(req, res);
+  } catch (error) {
+    logger.error('Error in forgot password route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+router.post('/logout', authenticateAdmin, async (req: AuthenticatedRequest, res) => {
+  try {
+    // For cookie-based sessions, the server would typically clear the session
+    // Since we're using JWT tokens stored in cookies, we can just clear the cookie
+    res.clearCookie('admin_token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax'
+    });
+
+    logger.info(`Admin logout: ${req.user?.id} - ${req.user?.email}`);
+    res.status(200).json({
+      success: true,
+      message: 'Logout successful'
+    });
+  } catch (error) {
+    logger.error('Error in logout route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+});
+
+export default router;
+
+###server/src/routes/appointment.ts
+import { Router } from 'express';
+import { PoolClient } from 'pg';
+import { AppointmentController } from '../controllers/appointmentController';
+import { createAppointmentSchema, getAppointmentSchema } from '../utils/validationSchemas';
+import { logger } from '../config/logger';
+import { validateInput } from '../middleware/validation';
+import { authRateLimit } from '../middleware/rateLimit';
+import pool from '../config/database';
+
+const router = Router();
+
+// POST /api/appointments - Create a new appointment
+router.post('/', async (req, res) => {
+  let client: PoolClient | null = null;
+  try {
+    client = await pool.connect();
+    const controller = new AppointmentController(client);
+    await controller.createAppointment(req, res);
+  } catch (error) {
+    logger.error('Error in createAppointment route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
+});
+
+// GET /api/appointments/:id - Retrieve appointment details
+router.get('/:id', async (req, res) => {
+  let client: PoolClient | null = null;
+  try {
+    client = await pool.connect();
+    const controller = new AppointmentController(client);
+    await controller.getAppointment(req, res);
+  } catch (error) {
+    logger.error('Error in getAppointment route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
+});
+
+export default router;
+
+###server/src/middleware/auth.ts
+import { Request, Response, NextFunction } from 'express';
+import { jwtService } from '../services/jwtService';
+
+export interface AuthenticatedRequest extends Request {
+  user?: {
+    id: number;
+    email: string;
+    role: string;
   };
 }
 
-export interface ForgotPasswordRequest {
-  email: string;
+export const authenticateAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  // First try to get token from Authorization header (for API calls)
+  const authHeader = req.headers['authorization'];
+  let token = jwtService.extractTokenFromHeader(authHeader);
+
+  console.log('=======================================check token 1:', authHeader);
+
+  // If no token in header, try to get from cookies (for browser requests)
+  if (!token && req.cookies && req.cookies.admin_token) {
+    console.log('=======================================check token 2:', req.cookies);
+    token = req.cookies.admin_token;
+  }
+
+  console.log('=======================================Received token:', token);
+
+  if (!token) {
+    res.status(401).json({
+      success: false,
+      message: 'Access token required'
+    });
+    return;
+  }
+
+  const decoded = jwtService.verifyToken(token);
+  if (!decoded) {
+    res.status(403).json({
+      success: false,
+      message: 'Invalid or expired token'
+    });
+    return;
+  }
+
+  req.user = decoded;
+  next();
+};
+
+export const requireAdminRole = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  const user = req.user;
+
+  if (!user) {
+    res.status(401).json({
+      success: false,
+      message: 'Authentication required'
+    });
+    return;
+  }
+
+  if (user.role !== 'admin' && user.role !== 'manager') {
+    res.status(403).json({
+      success: false,
+      message: 'Insufficient permissions'
+    });
+    return;
+  }
+
+  next();
+};
+
+###server/src/middleware/validation.ts
+import { Request, Response, NextFunction } from 'express';
+import { ObjectSchema } from 'joi';
+import { logger } from '../config/logger';
+
+export interface ValidationOptions {
+  body?: ObjectSchema;
+  params?: ObjectSchema;
+  query?: ObjectSchema;
+  headers?: ObjectSchema;
 }
 
-export interface ForgotPasswordResponse {
-  success: boolean;
-  message: string;
-}
+/**
+ * Input validation middleware using Joi schemas
+ */
+export const validateInput = (schemas: ValidationOptions) => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const errors: string[] = [];
 
-// Dashboard interfaces
-export interface DashboardFilters {
-  status?: string;
-  start_date?: string;
-  end_date?: string;
-}
+    // Validate request body
+    if (schemas.body) {
+      const { error } = schemas.body.validate(req.body);
+      if (error) {
+        errors.push(`Body: ${error.details.map(d => d.message).join(', ')}`);
+      }
+    }
 
-export interface DashboardResponse {
-  success: boolean;
-  data: {
-    appointments: Appointment[];
-    pagination: {
-      page: number;
-      limit: number;
-      total: number;
-      totalPages: number;
-    };
+    // Validate request parameters
+    if (schemas.params) {
+      const { error } = schemas.params.validate(req.params);
+      if (error) {
+        errors.push(`Params: ${error.details.map(d => d.message).join(', ')}`);
+      }
+    }
+
+    // Validate query parameters
+    if (schemas.query) {
+      const { error } = schemas.query.validate(req.query);
+      if (error) {
+        errors.push(`Query: ${error.details.map(d => d.message).join(', ')}`);
+      }
+    }
+
+    // Validate headers
+    if (schemas.headers) {
+      const { error } = schemas.headers.validate(req.headers);
+      if (error) {
+        errors.push(`Headers: ${error.details.map(d => d.message).join(', ')}`);
+      }
+    }
+
+    // If there are validation errors, return 400 Bad Request
+    if (errors.length > 0) {
+      logger.warn(`Validation error for ${req.method} ${req.path}: ${errors.join('; ')}`);
+      res.status(400).json({
+        success: false,
+        message: 'Validation error',
+        errors
+      });
+      return;
+    }
+
+    next();
   };
+};
+
+/**
+ * Validation middleware for appointment creation
+ */
+export const validateAppointmentCreation = validateInput({
+  body: require('../utils/validationSchemas').createAppointmentSchema
+});
+
+/**
+ * Validation middleware for appointment retrieval
+ */
+export const validateAppointmentRetrieval = validateInput({
+  params: require('../utils/validationSchemas').getAppointmentSchema.extract('id'),
+  query: require('../utils/validationSchemas').getAppointmentSchema.extract('email')
+});
+
+/**
+ * Validation middleware for admin login
+ */
+export const validateAdminLogin = validateInput({
+  body: require('../utils/validationSchemas').adminLoginSchema
+});
+
+/**
+ * Validation middleware for admin dashboard queries
+ */
+export const validateDashboardQuery = validateInput({
+  query: require('../utils/validationSchemas').dashboardQuerySchema
+});
+
+/**
+ * Validation middleware for appointment updates
+ */
+export const validateAppointmentUpdate = validateInput({
+  params: require('../utils/validationSchemas').updateAppointmentSchema.extract('id'),
+  body: require('../utils/validationSchemas').updateAppointmentSchema
+});
+
+/**
+ * Validation middleware for cache operations
+ */
+export const validateCacheOperation = validateInput({
+  body: require('../utils/validationSchemas').cacheOperationSchema
+});
+
+/**
+ * Generic validation middleware for any schema
+ */
+export const createValidationMiddleware = (schema: ObjectSchema, location: 'body' | 'params' | 'query' | 'headers' = 'body') => {
+  const schemas: ValidationOptions = {};
+  schemas[location] = schema;
+
+  return validateInput(schemas);
+};
+
+/**
+ * Validation schema for cache operations
+ */
+export const cacheOperationSchema = require('joi').object({
+  pattern: require('joi').string().pattern(/^[\w:*]+$/).required().messages({
+    'string.pattern.base': 'Pattern must contain only letters, numbers, colons, and asterisks'
+  })
+});
+
+###server/src/utils/validationSchemas.ts
+import Joi from 'joi';
+
+export const createAppointmentSchema = Joi.object({
+  name: Joi.string().min(2).max(100).required().messages({
+    'string.empty': 'Name is required',
+    'string.min': 'Name must be at least 2 characters long',
+    'string.max': 'Name cannot exceed 100 characters',
+  }),
+  email: Joi.string().email().required().messages({
+    'string.empty': 'Email is required',
+    'string.email': 'Please provide a valid email address',
+  }),
+  phone: Joi.string().pattern(/^[0-9+\-\s()]{7,15}$/).required().messages({
+    'string.empty': 'Phone number is required',
+    'string.pattern.base': 'Please provide a valid phone number',
+  }),
+  address: Joi.string().max(200).required().messages({
+    'string.empty': 'Address is required',
+    'string.max': 'Address cannot exceed 200 characters',
+  }),
+  date_time: Joi.date().iso().greater('now').required().messages({
+    'date.base': 'Please provide a valid date and time',
+    'date.greater': 'Appointment date must be in the future',
+  }),
+  duration: Joi.number().integer().min(15).max(240).required().messages({
+    'number.base': 'Duration must be a number',
+    'number.integer': 'Duration must be a whole number',
+    'number.min': 'Duration must be at least 15 minutes',
+    'number.max': 'Duration cannot exceed 240 minutes',
+  }),
+  service: Joi.string().max(255).optional().messages({
+    'string.max': 'Service description cannot exceed 255 characters',
+  }),
+});
+
+export const clientSchema = Joi.object({
+  name: Joi.string().min(2).max(100).required().messages({
+    'string.empty': 'Name is required',
+    'string.min': 'Name must be at least 2 characters long',
+    'string.max': 'Name cannot exceed 100 characters',
+  }),
+  email: Joi.string().email().required().messages({
+    'string.empty': 'Email is required',
+    'string.email': 'Please provide a valid email address',
+  }),
+  phone: Joi.string().pattern(/^[0-9+\-\s()]{7,15}$/).required().messages({
+    'string.empty': 'Phone number is required',
+    'string.pattern.base': 'Please provide a valid phone number',
+  }),
+  address: Joi.string().max(200).required().messages({
+    'string.empty': 'Address is required',
+    'string.max': 'Address cannot exceed 200 characters',
+  }),
+});
+
+export const getAppointmentSchema = Joi.object({
+  id: Joi.number().integer().positive().required().messages({
+    'number.base': 'Appointment ID must be a number',
+    'number.integer': 'Appointment ID must be a whole number',
+    'number.positive': 'Appointment ID must be positive',
+  }),
+  email: Joi.string().email().required().messages({
+    'string.empty': 'Email is required',
+    'string.email': 'Please provide a valid email address',
+  }),
+});
+
+export const adminLoginSchema = Joi.object({
+  email: Joi.string().email().required().messages({
+    'string.empty': 'Email is required',
+    'string.email': 'Please provide a valid email address',
+  }),
+  password: Joi.string().min(6).required().messages({
+    'string.empty': 'Password is required',
+    'string.min': 'Password must be at least 6 characters long',
+  }),
+});
+
+export const updateAppointmentSchema = Joi.object({
+  date_time: Joi.date().iso().greater('now').optional().messages({
+    'date.base': 'Please provide a valid date and time',
+    'date.greater': 'Appointment date must be in the future',
+  }),
+  duration: Joi.number().integer().min(15).max(240).optional().messages({
+    'number.base': 'Duration must be a number',
+    'number.integer': 'Duration must be a whole number',
+    'number.min': 'Duration must be at least 15 minutes',
+    'number.max': 'Duration cannot exceed 240 minutes',
+  }),
+  status: Joi.string().valid('booked', 'confirmed', 'cancelled', 'completed', 'missed').optional().messages({
+    'any.only': 'Status must be one of: booked, confirmed, cancelled, completed, missed',
+  }),
+});
+
+export const dashboardQuerySchema = Joi.object({
+  page: Joi.number().integer().min(1).default(1).messages({
+    'number.base': 'Page must be a number',
+    'number.integer': 'Page must be a whole number',
+    'number.min': 'Page must be at least 1',
+  }),
+  limit: Joi.number().integer().min(1).max(100).default(10).messages({
+    'number.base': 'Limit must be a number',
+    'number.integer': 'Limit must be a whole number',
+    'number.min': 'Limit must be at least 1',
+    'number.max': 'Limit cannot exceed 100',
+  }),
+  status: Joi.string().valid('booked', 'confirmed', 'cancelled', 'completed', 'missed').optional().messages({
+    'any.only': 'Status must be one of: booked, confirmed, cancelled, completed, missed',
+  }),
+  start_date: Joi.date().iso().optional().messages({
+    'date.base': 'Please provide a valid start date',
+  }),
+  end_date: Joi.date().iso().greater(Joi.ref('start_date')).optional().messages({
+    'date.base': 'Please provide a valid end date',
+    'date.greater': 'End date must be after start date',
+  }),
+});
+
+export const forgotPasswordSchema = Joi.object({
+  email: Joi.string().email().required().messages({
+    'string.empty': 'Email is required',
+    'string.email': 'Please provide a valid email address',
+  }),
+});
+
+###server/src/models/Client.ts
+import { PoolClient } from 'pg';
+
+export interface Client {
+  id: number;
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  created_at: Date;
+  updated_at: Date;
 }
+
+export class ClientModel {
+  constructor(private db: PoolClient) {}
+
+  async create(clientData: Omit<Client, 'id' | 'created_at' | 'updated_at'>): Promise<Client> {
+    const query = `
+      INSERT INTO clients (name, email, phone, address)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `;
+    const values = [clientData.name, clientData.email, clientData.phone, clientData.address];
+    const result = await this.db.query(query, values);
+    return result.rows[0];
+  }
+
+  async findByEmailOrPhone(email: string, phone: string): Promise<Client | null> {
+    const query = `
+      SELECT * FROM clients
+      WHERE email = $1 OR phone = $2
+    `;
+    const result = await this.db.query(query, [email, phone]);
+    return result.rows[0] || null;
+  }
+
+  async findById(id: number): Promise<Client | null> {
+    const query = 'SELECT * FROM clients WHERE id = $1';
+    const result = await this.db.query(query, [id]);
+    return result.rows[0] || null;
+  }
+}
+
+###server/src/models/Appointment.ts
+import { PoolClient } from 'pg';
 
 export interface Appointment {
   id: number;
-  client_name: string;
-  client_email: string;
-  date_time: string;
+  client_id: number;
+  service: string;
+  date_time: Date;
   duration: number;
-  status: 'pending' | 'confirmed' | 'completed' | 'cancelled' | 'missed';
-  created_at: string;
-  updated_at: string;
+  status: 'booked' | 'confirmed' | 'cancelled' | 'completed' | 'missed';
+  created_at: Date;
+  updated_at: Date;
+  reminder_scheduled_at?: Date | null;
 }
 
-// Appointment creation interface
-export interface CreateAppointmentRequest {
-  client_name: string;
-  client_email: string;
-  date_time: string;
-  duration: number;
+export interface AppointmentWithClient extends Appointment {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
 }
 
-export interface CreateAppointmentResponse {
-  success: boolean;
-  message: string;
-  data: Appointment;
+export class AppointmentModel {
+  constructor(private db: PoolClient) {}
+
+  async create(appointmentData: Omit<Appointment, 'id' | 'created_at' | 'updated_at'>): Promise<Appointment> {
+    const query = `
+      INSERT INTO appointments (client_id, service, date_time, duration, status)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `;
+    const values = [appointmentData.client_id, appointmentData.service || 'General Appointment', appointmentData.date_time, appointmentData.duration, appointmentData.status];
+    const result = await this.db.query(query, values);
+    return result.rows[0];
+  }
+
+  async findById(id: number): Promise<AppointmentWithClient | null> {
+    const query = `
+      SELECT a.*, c.name, c.email, c.phone, c.address
+      FROM appointments a
+      JOIN clients c ON a.client_id = c.id
+      WHERE a.id = $1
+    `;
+    const result = await this.db.query(query, [id]);
+    return result.rows[0] || null;
+  }
+
+  async findByClientAndDateTime(clientId: number, dateTime: Date): Promise<Appointment | null> {
+    const query = `
+      SELECT * FROM appointments
+      WHERE client_id = $1 AND date_time = $2
+    `;
+    const result = await this.db.query(query, [clientId, dateTime]);
+    return result.rows[0] || null;
+  }
+
+  async findByDateTime(dateTime: Date, duration?: number): Promise<Appointment | null> {
+    let query = `
+      SELECT * FROM appointments
+      WHERE status NOT IN ('cancelled', 'missed')
+        AND date_time < $1 + ($2 || ' minutes')::interval
+        AND date_time + (duration || ' minutes')::interval > $1
+      LIMIT 1
+    `;
+
+    const values = [dateTime, duration || 60]; // Default duration of 60 minutes if not provided
+    const result = await this.db.query(query, values);
+    return result.rows[0] || null;
+  }
 }
 
-// Appointment update interface
-export interface UpdateAppointmentRequest {
-  date_time?: string;
-  duration?: number;
-  status?: string;
-}
+###server/src/models/Admin.ts
+import { PoolClient } from 'pg';
+import bcrypt from 'bcrypt';
 
-export interface UpdateAppointmentResponse {
-  success: boolean;
-  message: string;
-  data: Appointment;
-}
-
-// Admin interfaces
 export interface Admin {
   id: number;
   name: string;
   email: string;
+  password_hash: string;
+  role: 'admin' | 'manager';
+  created_at: Date;
+  updated_at: Date;
+}
+
+export class AdminModel {
+  constructor(public db: PoolClient) {}
+
+  async create(adminData: Omit<Admin, 'id' | 'created_at' | 'updated_at' | 'password_hash'> & { password: string }): Promise<Admin> {
+    const passwordHash = await bcrypt.hash(adminData.password, 10);
+    const query = `
+      INSERT INTO admins (name, email, password_hash, role)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `;
+    const values = [adminData.name, adminData.email, passwordHash, adminData.role];
+    const result = await this.db.query(query, values);
+    return result.rows[0];
+  }
+
+  async findByEmail(email: string): Promise<Admin | null> {
+    const query = 'SELECT * FROM admins WHERE email = $1';
+    const result = await this.db.query(query, [email]);
+    return result.rows[0] || null;
+  }
+
+  async findById(id: number): Promise<Admin | null> {
+    const query = 'SELECT * FROM admins WHERE id = $1';
+    const result = await this.db.query(query, [id]);
+    return result.rows[0] || null;
+  }
+
+  async verifyPassword(password: string, hash: string): Promise<boolean> {
+    const isMatch = await bcrypt.compare(password, hash);
+    return isMatch;
+  }
+}
+
+###server/src/services/jwtService.ts
+import jwt from 'jsonwebtoken';
+import { jwtConfig } from '../config/jwt';
+
+export interface AdminPayload {
+  id: number;
+  email: string;
   role: string;
 }
 
-export interface AdminResponse {
-  success: boolean;
-  data: Admin;
+export interface RefreshTokenPayload {
+  id: number;
+  email: string;
+  role: string;
+  tokenId: string;
 }
 
-class ApiService {
-  private baseURL: string;
+export class JWTService {
+  generateToken(payload: AdminPayload): string {
+    return jwt.sign(payload, jwtConfig.secret, {
+      expiresIn: jwtConfig.expiresIn
+    } as jwt.SignOptions);
+  }
+
+  generateRefreshToken(payload: RefreshTokenPayload): string {
+    const refreshTokenSecret = process.env.REFRESH_TOKEN_SECRET || jwtConfig.secret + '_refresh';
+    const refreshTokenExpiry = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d';
+
+    return jwt.sign(payload, refreshTokenSecret, {
+      expiresIn: refreshTokenExpiry
+    } as jwt.SignOptions);
+  }
+
+  verifyToken(token: string): AdminPayload | null {
+    try {
+      const decoded = jwt.verify(token, jwtConfig.secret) as AdminPayload;
+      return decoded;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  verifyRefreshToken(token: string): RefreshTokenPayload | null {
+    try {
+      const refreshTokenSecret = process.env.REFRESH_TOKEN_SECRET || jwtConfig.secret + '_refresh';
+      const decoded = jwt.verify(token, refreshTokenSecret) as RefreshTokenPayload;
+      return decoded;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  extractTokenFromHeader(authHeader: string | undefined): string | null {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return null;
+    }
+    return authHeader.substring(7);
+  }
+
+  getTokenExpirationTime(token: string): number | null {
+    try {
+      const decoded = jwt.decode(token) as any;
+      if (decoded && decoded.exp) {
+        return decoded.exp * 1000; // Convert to milliseconds
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  isTokenExpired(token: string): boolean {
+    const expirationTime = this.getTokenExpirationTime(token);
+    if (!expirationTime) return true;
+
+    return Date.now() >= expirationTime;
+  }
+
+  getTokenRemainingTime(token: string): number {
+    const expirationTime = this.getTokenExpirationTime(token);
+    if (!expirationTime) return 0;
+
+    return Math.max(0, expirationTime - Date.now());
+  }
+
+  generateResetToken(payload: { id: number; email: string }): string {
+    const resetTokenSecret = process.env.RESET_TOKEN_SECRET || jwtConfig.secret + '_reset';
+    const resetTokenExpiry = process.env.RESET_TOKEN_EXPIRES_IN || '1h';
+
+    return jwt.sign(payload, resetTokenSecret, {
+      expiresIn: resetTokenExpiry
+    } as jwt.SignOptions);
+  }
+
+  verifyResetToken(token: string): { id: number; email: string } | null {
+    try {
+      const resetTokenSecret = process.env.RESET_TOKEN_SECRET || jwtConfig.secret + '_reset';
+      const decoded = jwt.verify(token, resetTokenSecret) as { id: number; email: string };
+      return decoded;
+    } catch (error) {
+      return null;
+    }
+  }
+}
+
+export const jwtService = new JWTService();
+
+###server/src/services/emailService.ts
+import { emailTransporter, emailConfig } from '../config/email';
+
+export const sendEmail = async (
+  to: string,
+  subject: string,
+  text: string,
+  html?: string
+) => {
+  try {
+    const mailOptions = {
+      from: emailConfig.from,
+      to,
+      subject,
+      text,
+      html,
+    };
+
+    await emailTransporter.sendMail(mailOptions);
+    return { success: true, message: 'Email sent successfully' };
+  } catch (error) {
+    console.error('Error sending email:', error);
+    return { success: false, message: 'Failed to send email' };
+  }
+}
+
+###server/src/config/email.ts
+import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export const emailConfig = {
+  apiKey: process.env.EMAIL_API_KEY,
+  from: process.env.EMAIL_FROM || 'noreply@salonapp.com',
+};
+
+// Create transporter
+export const emailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: emailConfig.from,
+    pass: emailConfig.apiKey,
+  },
+});
+
+###server/src/jobs/queue.ts
+import Queue from 'bull';
+import pool from '../config/database';
+import { NotificationService } from '../services/notificationService';
+import { logger } from '../config/logger';
+
+// Create a new Bull queue for emails
+const emailQueue = new Queue('email queue', process.env.REDIS_URL || 'redis://default:your_strong_redis_password_here@redis:6379');
+
+// Create a new Bull queue for WhatsApp
+const whatsappQueue = new Queue('whatsapp queue', process.env.REDIS_URL || 'redis://default:your_strong_redis_password_here@redis:6379');
+
+// Create a unified notification queue
+const notificationQueue = new Queue('notification queue', process.env.REDIS_URL || 'redis://default:your_strong_redis_password_here@redis:6379');
+
+
+// Process notification jobs (new unified system)
+notificationQueue.process('send notification', async (job) => {
+  const { appointmentId, clientId, clientName, clientEmail, clientPhone, appointmentTime, duration, type, channel } = job.data;
+
+  try {
+    // Get database connection
+    const db = await pool.connect();
+
+    // Create notification service
+    const notificationService = new NotificationService(db);
+
+    // Prepare notification data
+    const notificationData = {
+      appointmentId,
+      clientId,
+      clientName,
+      clientEmail,
+      clientPhone,
+      appointmentTime: new Date(appointmentTime),
+      duration,
+      type,
+      channel
+    };
+
+    // Send notification
+    const result = await notificationService.sendNotification(notificationData);
+
+    // Release database connection
+    db.release();
+
+    return result;
+
+  } catch (error) {
+    logger.error('Notification job failed:', error);
+    throw error;
+  }
+});
+
+// Process email jobs (for admin operations like password reset, cancellations, etc.)
+emailQueue.process('send email', async (job) => {
+  const { to, subject, text, html } = job.data;
+
+  // Import the email service
+  const { sendEmail } = await import('../services/emailService');
+
+  const result = await sendEmail(to, subject, text, html);
+  return result;
+});
+
+// Process reminder jobs (legacy support - will be replaced by notification queue)
+emailQueue.process('send reminder', async (job) => {
+  const { appointmentId, clientName, clientEmail, appointmentTime, duration, type } = job.data;
+
+  // Import the email service
+  const { sendEmail } = await import('../services/emailService');
+
+  const subject = `Appointment Reminder - ${type}`;
+  const text = `Hello ${clientName},\n\nThis is a reminder for your appointment scheduled for ${new Date(appointmentTime).toLocaleString()} with a duration of ${duration} minutes.\n\nWe look forward to seeing you!\n\nThank you!`;
+  const html = `<p>Hello ${clientName},</p><p>This is a reminder for your appointment scheduled for ${new Date(appointmentTime).toLocaleString()} with a duration of ${duration} minutes.</p><p>We look forward to seeing you!</p><p>Thank you!</p>`;
+
+  const result = await sendEmail(clientEmail, subject, text, html);
+  return result;
+});
+
+whatsappQueue.process('send reminder', async (job) => {
+  const { appointmentId, clientName, clientPhone, appointmentTime, duration, type } = job.data;
+
+  // Import the WhatsApp service
+  const { sendWhatsAppMessage } = await import('../services/whatsappService');
+
+  const body = `Hello ${clientName}, this is a reminder for your appointment scheduled for ${new Date(appointmentTime).toLocaleString()} with a duration of ${duration} minutes. We look forward to seeing you!`;
+
+  const result = await sendWhatsAppMessage(clientPhone, body);
+  return result;
+});
+
+export { emailQueue, whatsappQueue, notificationQueue };
+
+###server/src/middleware/cors.ts
+import { Request, Response, NextFunction } from 'express';
+import cors from 'cors';
+import { logger } from '../config/logger';
+
+// CORS configuration
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    // Define allowed origins
+    const allowedOrigins = process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(',')
+      : [
+          'https://asb-8xh8.vercel.app',
+          'https://asb-henna.vercel.app'
+        ];
+
+    if (allowedOrigins.includes(origin)) {
+      logger.info(`CORS allowed for origin: ${origin}`);
+      callback(null, true);
+    } else {
+      logger.warn(`CORS blocked for origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true, // Allow cookies to be sent
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Origin',
+    'X-Requested-With',
+    'Content-Type',
+    'Accept',
+    'Authorization',
+    'X-Request-ID'
+  ],
+  exposedHeaders: ['X-Request-ID'],
+  optionsSuccessStatus: 200, // Some legacy browsers choke on 204
+  maxAge: 86400 // 24 hours preflight cache
+};
+
+/**
+ * CORS middleware configuration
+ */
+export const corsMiddleware = cors(corsOptions);
+
+/**
+ * Custom CORS middleware for specific endpoints
+ */
+export const createCorsMiddleware = (options: any) => {
+  return cors(options);
+};
+
+/**
+ * Strict CORS middleware for admin endpoints
+ */
+export const adminCorsMiddleware = cors({
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    if (!origin) return callback(null, true);
+
+    // More restrictive origins for admin endpoints
+    const allowedOrigins = process.env.ADMIN_ALLOWED_ORIGINS
+      ? process.env.ADMIN_ALLOWED_ORIGINS.split(',')
+      : [
+          'https://asb-8xh8.vercel.app',
+          'https://asb-henna.vercel.app'
+        ];
+
+    if (allowedOrigins.includes(origin)) {
+      logger.info(`Admin CORS allowed for origin: ${origin}`);
+      callback(null, true);
+    } else {
+      logger.warn(`Admin CORS blocked for origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Origin',
+    'X-Requested-With',
+    'Content-Type',
+    'Accept',
+    'Authorization',
+    'X-Request-ID'
+  ],
+  exposedHeaders: ['X-Request-ID'],
+  optionsSuccessStatus: 200,
+  maxAge: 3600 // 1 hour preflight cache for admin endpoints
+});
+
+/**
+ * CORS middleware for cache endpoints
+ */
+export const cacheCorsMiddleware = cors({
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    if (!origin) return callback(null, true);
+
+    // Only allow specific origins for cache operations
+    const allowedOrigins = process.env.CACHE_ALLOWED_ORIGINS
+      ? process.env.CACHE_ALLOWED_ORIGINS.split(',')
+      : [
+          'https://asb-8xh8.vercel.app'
+        ];
+
+    if (allowedOrigins.includes(origin)) {
+      logger.info(`Cache CORS allowed for origin: ${origin}`);
+      callback(null, true);
+    } else {
+      logger.warn(`Cache CORS blocked for origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: [
+    'Origin',
+    'X-Requested-With',
+    'Content-Type',
+    'Accept',
+    'Authorization',
+    'X-Request-ID'
+  ],
+  exposedHeaders: ['X-Request-ID'],
+  optionsSuccessStatus: 200,
+  maxAge: 1800 // 30 minutes preflight cache for cache endpoints
+});
+
+/**
+ * CORS error handler
+ */
+export const corsErrorHandler = (err: any, req: Request, res: Response, next: NextFunction): void => {
+  if (err && err.message && err.message.includes('CORS')) {
+    logger.error(`CORS error: ${err.message}`);
+    res.status(403).json({
+      success: false,
+      message: 'CORS policy violation',
+      error: err.message
+    });
+  } else {
+    next(err);
+  }
+};
+
+###server/src/middleware/rateLimit.ts
+import { Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
+import { logger } from '../config/logger';
+
+/**
+ * Rate limiting configuration for public endpoints
+ * Limits: 5 requests per minute per IP
+ */
+export const publicRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 5, // limit each IP to 5 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again later.',
+    retryAfter: 60
+  },
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  handler: (req: Request, res: Response) => {
+    logger.warn(`Rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`);
+    res.status(429).json({
+      success: false,
+      message: 'Too many requests from this IP, please try again later.',
+      retryAfter: 60
+    });
+  },
+  skip: (req: Request) => {
+    // Skip rate limiting for health checks
+    return req.path === '/health' || req.path === '/health/ready' || req.path === '/health/live';
+  }
+});
+
+/**
+ * Rate limiting configuration for admin endpoints
+ * Limits: 100 requests per minute per IP
+ */
+export const adminRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many admin requests from this IP, please try again later.',
+    retryAfter: 60
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response) => {
+    logger.warn(`Admin rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`);
+    res.status(429).json({
+      success: false,
+      message: 'Too many admin requests from this IP, please try again later.',
+      retryAfter: 60
+    });
+  }
+});
+
+/**
+ * Rate limiting configuration for authentication endpoints
+ * Stricter limits for login attempts
+ * Limits: 10 requests per 15 minutes per IP
+ */
+export const authRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // limit each IP to 10 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many login attempts from this IP, please try again later.',
+    retryAfter: 900
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response) => {
+    logger.warn(`Auth rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`);
+    res.status(429).json({
+      success: false,
+      message: 'Too many login attempts from this IP, please try again later.',
+      retryAfter: 900
+    });
+  }
+});
+
+/**
+ * Rate limiting configuration for cache management endpoints
+ * Very strict limits for cache operations
+ * Limits: 20 requests per minute per IP
+ */
+export const cacheRateLimit = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20, // limit each IP to 20 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many cache operations from this IP, please try again later.',
+    retryAfter: 60
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response) => {
+    logger.warn(`Cache rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`);
+    res.status(429).json({
+      success: false,
+      message: 'Too many cache operations from this IP, please try again later.',
+      retryAfter: 60
+    });
+  }
+});
+
+/**
+ * Custom rate limiting middleware for specific endpoints
+ */
+export const createCustomRateLimit = (max: number, windowMs: number, message?: string) => {
+  return rateLimit({
+    windowMs,
+    max,
+    message: {
+      success: false,
+      message: message || `Too many requests from this IP, please try again later.`,
+      retryAfter: Math.ceil(windowMs / 1000)
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req: Request, res: Response) => {
+      logger.warn(`Custom rate limit exceeded for IP: ${req.ip}, Path: ${req.path}`);
+      res.status(429).json({
+        success: false,
+        message: message || 'Too many requests from this IP, please try again later.',
+        retryAfter: Math.ceil(windowMs / 1000)
+      });
+    }
+  });
+};
+
+###server/src/middleware/requestId.ts
+import { Request, Response, NextFunction } from 'express';
+import { v4 as uuidv4 } from 'uuid';
+
+export interface RequestWithId extends Request {
+  requestId?: string;
+}
+
+/**
+ * Request ID middleware for tracing requests across the application
+ */
+export const requestIdMiddleware = (req: RequestWithId, res: Response, next: NextFunction): void => {
+  // Generate or extract request ID
+  const requestId = req.headers['x-request-id'] as string || uuidv4();
+
+  // Add request ID to request object
+  req.requestId = requestId;
+
+  // Add request ID to response headers for client visibility
+  res.setHeader('X-Request-ID', requestId);
+
+  // Add request ID to response locals for logging
+  res.locals.requestId = requestId;
+
+  next();
+};
+
+###server/src/jobs/monitoring.ts
+import { Queue } from 'bull';
+import { createBullBoard } from '@bull-board/api';
+import { BullAdapter } from '@bull-board/api/bullAdapter';
+import { ExpressAdapter } from '@bull-board/express';
+import { emailQueue, whatsappQueue, notificationQueue } from './queue';
+import { logger } from '../config/logger';
+
+export class QueueMonitoring {
+  private serverAdapter: ExpressAdapter;
 
   constructor() {
-    // In development, we'll use the server port 3008
-    // In production, this would be the actual API URL
-    this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+    this.serverAdapter = new ExpressAdapter();
+    this.setupBullBoard();
   }
 
-  private getHeaders(): HeadersInit {
-    return {
-      'Content-Type': 'application/json',
-    };
-  }
+  private setupBullBoard(): void {
+    this.serverAdapter.setBasePath('/bull-board');
 
-  private async handleResponse<T>(response: Response): Promise<T> {
-    const contentType = response.headers.get('content-type');
-    const isJson = contentType && contentType.includes('application/json');
-
-    if (!response.ok) {
-      let errorMessage = 'An error occurred';
-      
-      if (isJson) {
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.message || 'An error occurred';
-        } catch {
-          errorMessage = response.statusText || 'An error occurred';
-        }
-      } else {
-        errorMessage = response.statusText || 'An error occurred';
-      }
-
-      throw new Error(errorMessage);
-    }
-
-    if (response.status === 204 || response.headers.get('content-length') === '0') {
-      return {} as T;
-    }
-
-    if (isJson) {
-      return response.json();
-    }
-
-    return response.text() as unknown as T;
-  }
-
-  // Authentication endpoints
-  async login(credentials: LoginCredentials): Promise<LoginResponse> {
-    console.log('================ Login tets ==================');
-    const response = await fetch(`${this.baseURL}/api/admin/login`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(credentials),
-      credentials: 'include', // Include cookies in the request
+    const { addQueue, removeQueue, setQueues, replaceQueues } = createBullBoard({
+      queues: [
+        new BullAdapter(emailQueue),
+        new BullAdapter(whatsappQueue),
+        new BullAdapter(notificationQueue)
+      ],
+      serverAdapter: this.serverAdapter,
     });
 
-    console.log('================ Login Response ==================');
-    console.log('Status:', response.status);
-    console.log('Headers:', response.headers);
-
-    return this.handleResponse<LoginResponse>(response);
+    logger.info('Bull Board monitoring setup complete');
+    logger.info('Queue monitoring available at: /bull-board');
   }
 
-  async forgotPassword(request: ForgotPasswordRequest): Promise<ForgotPasswordResponse> {
-    const response = await fetch(`${this.baseURL}/api/admin/forgot-password`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(request),
-      credentials: 'include', // Include cookies in the request
-    });
-
-    return this.handleResponse<ForgotPasswordResponse>(response);
+  public getRouter() {
+    return this.serverAdapter.getRouter();
   }
 
-  // Admin endpoints
-  async getAdminProfile(): Promise<AdminResponse> {
-    const response = await fetch(`${this.baseURL}/api/admin/profile`, {
-      method: 'GET',
-      headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
-    });
-
-    return this.handleResponse<AdminResponse>(response);
-  }
-
-  async logout(): Promise<{ success: boolean; message: string }> {
-    const response = await fetch(`${this.baseURL}/api/admin/logout`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
-    });
-
-    return this.handleResponse<{ success: boolean; message: string }>(response);
-  }
-
-  // Dashboard endpoints
-  async getDashboard(page: number = 1, limit: number = 10, filters?: DashboardFilters): Promise<DashboardResponse> {
-    const params = new URLSearchParams({
-      page: page.toString(),
-      limit: limit.toString(),
-    });
-
-    if (filters?.status) {
-      params.append('status', filters.status);
-    }
-    if (filters?.start_date) {
-      params.append('start_date', filters.start_date);
-    }
-    if (filters?.end_date) {
-      params.append('end_date', filters.end_date);
-    }
-
-    const response = await fetch(`${this.baseURL}/api/admin/dashboard?${params.toString()}`, {
-      method: 'GET',
-      headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
-    });
-
-    return this.handleResponse<DashboardResponse>(response);
-  }
-
-  // Appointment management endpoints
-  async createAppointment(data: CreateAppointmentRequest): Promise<CreateAppointmentResponse> {
-    const response = await fetch(`${this.baseURL}/api/appointments`, {
-      method: 'POST',
-      headers: this.getHeaders(),
-      body: JSON.stringify(data),
-      credentials: 'include', // Include cookies in the request
-    });
-
-    return this.handleResponse<CreateAppointmentResponse>(response);
-  }
-
-  async getAppointment(id: number): Promise<{ success: boolean; data: Appointment }> {
-    const response = await fetch(`${this.baseURL}/api/appointments/${id}`, {
-      method: 'GET',
-      headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
-    });
-
-    return this.handleResponse<{ success: boolean; data: Appointment }>(response);
-  }
-
-  async updateAppointment(id: number, data: UpdateAppointmentRequest): Promise<UpdateAppointmentResponse> {
-    const response = await fetch(`${this.baseURL}/api/admin/appointments/${id}`, {
-      method: 'PUT',
-      headers: this.getHeaders(),
-      body: JSON.stringify(data),
-      credentials: 'include', // Include cookies in the request
-    });
-
-    return this.handleResponse<UpdateAppointmentResponse>(response);
-  }
-
-  async cancelAppointment(id: number): Promise<{ success: boolean; message: string }> {
-    const response = await fetch(`${this.baseURL}/api/admin/appointments/${id}`, {
-      method: 'DELETE',
-      headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
-    });
-
-    return this.handleResponse<{ success: boolean; message: string }>(response);
-  }
-
-  // Utility methods
-  isAuthenticated(): boolean {
-    // For cookie-based auth, we need to check if we have a valid session
-    // This is typically done by making a request to a protected endpoint
-    // or checking for the presence of auth cookies
-    return true; // This will be handled by the server-side session
+  public getQueues(): Queue[] {
+    return [emailQueue, whatsappQueue, notificationQueue];
   }
 }
 
-// Cache interfaces
-export interface CacheStats {
-  connected: boolean;
-  keyCount: number;
-  memoryUsage: number;
-  timestamp: string;
+// Export singleton instance
+export const queueMonitoring = new QueueMonitoring();
+
+###server/src/jobs/reminderScheduler.ts
+import cron from 'node-cron';
+import { PoolClient } from 'pg';
+import { emailQueue, whatsappQueue, notificationQueue } from './queue';
+import { logger } from '../config/logger';
+import pool from '../config/database';
+
+interface Appointment {
+  id: number;
+  client_id: number;
+  date_time: Date;
+  duration: number;
+  status: string;
+  reminder_scheduled_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  client_name: string;
+  client_email: string;
+  client_phone: string;
 }
 
-export interface CacheHealth {
-  status: 'healthy' | 'unhealthy';
-  connected: boolean;
-  keyCount: number;
-  memoryUsage: number;
-  timestamp: string;
-  error?: string;
-}
+export class ReminderScheduler {
+  private db!: PoolClient;
 
-// Cache endpoints
-export async function getCacheStats(): Promise<{ success: boolean; data: CacheStats }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
-  const response = await fetch(`${baseURL}/api/cache/stats`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  });
-  
-  const contentType = response.headers.get('content-type');
-  const isJson = contentType && contentType.includes('application/json');
+  private constructor() {}
 
-  if (!response.ok) {
-    let errorMessage = 'An error occurred';
-    
-    if (isJson) {
+  public static async create(): Promise<ReminderScheduler> {
+    const scheduler = new ReminderScheduler();
+    await scheduler.initializeDatabase();
+    scheduler.scheduleReminderJobs();
+    scheduler.scheduleCleanupJob();
+    return scheduler;
+  }
+
+  private async initializeDatabase(): Promise<void> {
+    try {
+      this.db = await pool.connect();
+      logger.info('Reminder scheduler database connection established');
+    } catch (error) {
+      logger.error('Failed to connect to database for reminder scheduler:', error);
+      throw error;
+    }
+  }
+
+  private scheduleReminderJobs(): void {
+    cron.schedule('* * * * *', async () => {
       try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || 'An error occurred';
-      } catch {
-        errorMessage = response.statusText || 'An error occurred';
+        logger.info('Running reminder scheduler...');
+        await this.processUpcomingAppointments();
+      } catch (error) {
+        logger.error('Error in reminder scheduler:', error);
       }
-    } else {
-      errorMessage = response.statusText || 'An error occurred';
+    });
+
+    logger.info('Reminder scheduler configured to run every minute');
+  }
+
+  private scheduleCleanupJob(): void {
+    cron.schedule('0 2 * * *', async () => {
+      try {
+        logger.info('Running daily cleanup job...');
+        await this.cleanupOldAppointments();
+      } catch (error) {
+        logger.error('Error in cleanup job:', error);
+      }
+    });
+
+    logger.info('Cleanup job configured to run daily at 2 AM');
+  }
+
+  private async processUpcomingAppointments(): Promise<void> {
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour
+    const thirtyMinutesFromNow = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes
+
+    const query = `
+      SELECT a.*, c.name as client_name, c.email as client_email, c.phone as client_phone
+      FROM appointments a
+      JOIN clients c ON a.client_id = c.id
+      WHERE a.status = 'booked'
+        AND a.date_time BETWEEN $1 AND $2
+        AND (a.reminder_scheduled_at IS NULL OR a.reminder_scheduled_at < $3)
+      ORDER BY a.date_time
+    `;
+
+    const result = await this.db.query(query, [now, oneHourFromNow, new Date(now.getTime() - 24 * 60 * 60 * 1000)]);
+
+    if (result.rows.length === 0) {
+      logger.info('No upcoming appointments found for reminder scheduling');
+      return;
     }
 
-    throw new Error(errorMessage);
+    logger.info(`Found ${result.rows.length} appointments for reminder scheduling`);
+
+    for (const appointment of result.rows) {
+      await this.scheduleReminderJobsForAppointment(appointment);
+
+      await this.markRemindersScheduled(appointment.id);
+    }
   }
 
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return {} as { success: boolean; data: CacheStats };
-  }
+  private async scheduleReminderJobsForAppointment(appointment: Appointment): Promise<void> {
+    const appointmentTime = new Date(appointment.date_time);
 
-  if (isJson) {
-    return response.json();
-  }
-
-  return response.text() as unknown as { success: boolean; data: CacheStats };
-}
-
-export async function clearCache(): Promise<{ success: boolean; message: string }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
-  const response = await fetch(`${baseURL}/api/cache/clear`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  });
-  
-  const contentType = response.headers.get('content-type');
-  const isJson = contentType && contentType.includes('application/json');
-
-  if (!response.ok) {
-    let errorMessage = 'An error occurred';
-    
-    if (isJson) {
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || 'An error occurred';
-      } catch {
-        errorMessage = response.statusText || 'An error occurred';
-      }
-    } else {
-      errorMessage = response.statusText || 'An error occurred';
+    const oneHourBefore = new Date(appointmentTime.getTime() - 60 * 60 * 1000);
+    if (oneHourBefore > new Date()) {
+      await this.scheduleReminderJob(appointment, '1-hour', oneHourBefore);
     }
 
-    throw new Error(errorMessage);
-  }
-
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return {} as { success: boolean; message: string };
-  }
-
-  if (isJson) {
-    return response.json();
-  }
-
-  return response.text() as unknown as { success: boolean; message: string };
-}
-
-export async function invalidateCache(pattern: string): Promise<{ success: boolean; message: string }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
-  const response = await fetch(`${baseURL}/api/cache/invalidate`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ pattern }),
-    credentials: 'include',
-  });
-  
-  const contentType = response.headers.get('content-type');
-  const isJson = contentType && contentType.includes('application/json');
-
-  if (!response.ok) {
-    let errorMessage = 'An error occurred';
-    
-    if (isJson) {
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || 'An error occurred';
-      } catch {
-        errorMessage = response.statusText || 'An error occurred';
-      }
-    } else {
-      errorMessage = response.statusText || 'An error occurred';
+    const thirtyMinutesBefore = new Date(appointmentTime.getTime() - 30 * 60 * 1000);
+    if (thirtyMinutesBefore > new Date()) {
+      await this.scheduleReminderJob(appointment, '30-minutes', thirtyMinutesBefore);
     }
-
-    throw new Error(errorMessage);
   }
 
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return {} as { success: boolean; message: string };
-  }
-
-  if (isJson) {
-    return response.json();
-  }
-
-  return response.text() as unknown as { success: boolean; message: string };
-}
-
-export async function getCacheHealth(): Promise<{ success: boolean; data: CacheHealth }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
-  const response = await fetch(`${baseURL}/api/cache/health`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  });
-  
-  const contentType = response.headers.get('content-type');
-  const isJson = contentType && contentType.includes('application/json');
-
-  if (!response.ok) {
-    let errorMessage = 'An error occurred';
-    
-    if (isJson) {
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || 'An error occurred';
-      } catch {
-        errorMessage = response.statusText || 'An error occurred';
-      }
-    } else {
-      errorMessage = response.statusText || 'An error occurred';
-    }
-
-    throw new Error(errorMessage);
-  }
-
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return {} as { success: boolean; data: CacheHealth };
-  }
-
-  if (isJson) {
-    return response.json();
-  }
-
-  return response.text() as unknown as { success: boolean; data: CacheHealth };
-}
-
-// Health endpoints
-export async function getHealth(): Promise<{ status: string; timestamp: string; uptime: number }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
-  const response = await fetch(`${baseURL}/api/health`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  });
-  
-  const contentType = response.headers.get('content-type');
-  const isJson = contentType && contentType.includes('application/json');
-
-  if (!response.ok) {
-    let errorMessage = 'An error occurred';
-    
-    if (isJson) {
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || 'An error occurred';
-      } catch {
-        errorMessage = response.statusText || 'An error occurred';
-      }
-    } else {
-      errorMessage = response.statusText || 'An error occurred';
-    }
-
-    throw new Error(errorMessage);
-  }
-
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return {} as { status: string; timestamp: string; uptime: number };
-  }
-
-  if (isJson) {
-    return response.json();
-  }
-
-  return response.text() as unknown as { status: string; timestamp: string; uptime: number };
-}
-
-export async function getReadiness(): Promise<{ status: string; timestamp: string }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
-  const response = await fetch(`${baseURL}/api/health/ready`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  });
-  
-  const contentType = response.headers.get('content-type');
-  const isJson = contentType && contentType.includes('application/json');
-
-  if (!response.ok) {
-    let errorMessage = 'An error occurred';
-    
-    if (isJson) {
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || 'An error occurred';
-      } catch {
-        errorMessage = response.statusText || 'An error occurred';
-      }
-    } else {
-      errorMessage = response.statusText || 'An error occurred';
-    }
-
-    throw new Error(errorMessage);
-  }
-
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return {} as { status: string; timestamp: string };
-  }
-
-  if (isJson) {
-    return response.json();
-  }
-
-  return response.text() as unknown as { status: string; timestamp: string };
-}
-
-export async function getLiveness(): Promise<{ status: string; timestamp: string; pid: number; uptime: number }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
-  const response = await fetch(`${baseURL}/api/health/live`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include',
-  });
-  
-  const contentType = response.headers.get('content-type');
-  const isJson = contentType && contentType.includes('application/json');
-
-  if (!response.ok) {
-    let errorMessage = 'An error occurred';
-    
-    if (isJson) {
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || 'An error occurred';
-      } catch {
-        errorMessage = response.statusText || 'An error occurred';
-      }
-    } else {
-      errorMessage = response.statusText || 'An error occurred';
-    }
-
-    throw new Error(errorMessage);
-  }
-
-  if (response.status === 204 || response.headers.get('content-length') === '0') {
-    return {} as { status: string; timestamp: string; pid: number; uptime: number };
-  }
-
-  if (isJson) {
-    return response.json();
-  }
-
-  return response.text() as unknown as { status: string; timestamp: string; pid: number; uptime: number };
-}
-
-export const apiService = new ApiService();
-
-```
-
-###client/lib/auth.ts
-```
-'use client';
-
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { apiService, LoginCredentials } from './api';
-
-interface AuthContextType {
-  isAuthenticated: boolean;
-  admin: {
-    id: number;
-    name: string;
-    email: string;
-    role: string;
-  } | null;
-  isLoading: boolean;
-  error: string | null;
-  login: (credentials: LoginCredentials) => Promise<void>;
-  logout: () => void;
-  clearError: () => void;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
-
-interface AuthProviderProps {
-  children: ReactNode;
-}
-
-export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [admin, setAdmin] = useState<{
-    id: number;
-    name: string;
-    email: string;
-    role: string;
-  } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Check if user is already authenticated on mount
-    const checkAuth = async () => {
-      try {
-        // For cookie-based auth, we need to make a request to verify the session
-        // We'll try to fetch the admin profile to check if we have a valid session
-        const response = await apiService.getAdminProfile();
-        if (response.success) {
-          // If this succeeds, the user is authenticated
-          setIsAuthenticated(true);
-          setAdmin(response.data);
-        } else {
-          setIsAuthenticated(false);
-          setAdmin(null);
-        }
-      } catch (err) {
-        console.error('Auth check failed:', err);
-        setIsAuthenticated(false);
-        setAdmin(null);
-      } finally {
-        setIsLoading(false);
-      }
+  private async scheduleReminderJob(appointment: Appointment, type: string, scheduledTime: Date): Promise<void> {
+    const jobData = {
+      appointmentId: appointment.id,
+      clientId: appointment.client_id,
+      clientName: appointment.client_name,
+      clientEmail: appointment.client_email,
+      clientPhone: appointment.client_phone,
+      appointmentTime: appointment.date_time,
+      duration: appointment.duration,
+      type: type
     };
 
-    checkAuth();
-  }, []);
-
-  const login = async (credentials: LoginCredentials) => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      console.log('Login test with credentials:', credentials);
-      const response = await apiService.login(credentials);
-      console.log('Login response:', response);
-      
-      if (response.success) {
-        setIsAuthenticated(true);
-        setAdmin(response.data.admin);
-      } else {
-        setError(response.message || 'Login failed');
+    await emailQueue.add('send reminder', jobData, {
+      delay: scheduledTime.getTime() - Date.now(),
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 2000
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred during login');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const logout = async () => {
-    try {
-      // Make a logout request to clear server-side session
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008'}/api/admin/logout`, {
-        method: 'POST',
-        credentials: 'include'
-      });
-    } catch (err) {
-      console.error('Logout request failed:', err);
-    }
-    
-    setIsAuthenticated(false);
-    setAdmin(null);
-    setError(null);
-  };
-
-  const clearError = () => {
-    setError(null);
-  };
-
-  const value: AuthContextType = {
-    isAuthenticated,
-    admin,
-    isLoading,
-    error,
-    login,
-    logout,
-    clearError,
-  };
-
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-```
-
-###client/app/layout.ts
-```
-import type { Metadata, Viewport } from "next";
-import { Inter, Geist_Mono } from 'next/font/google'
-import "./globals.css";
-import { AuthProvider } from "../lib/auth";
-
-const inter = Inter({ 
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
-
-const geistMono = Geist_Mono({ 
-  subsets: ["latin"],
-  variable: "--font-geist-mono",
-});
-
-export const metadata: Metadata = {
-  title: 'SALON OS - Modern Management',
-  description: 'A comprehensive salon management system with appointment booking, payments, and customer care',
-  generator: 'B00ZE',
-}
-
-export const viewport: Viewport = {
-  themeColor: '#0D0D0D',
-  width: 'device-width',
-  initialScale: 1,
-}
-
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  return (
-    <html lang="en" className="dark">
-      <body
-        className={`${inter.variable} ${geistMono.variable} font-sans antialiased bg-background text-foreground min-h-screen`}
-      >
-        <AuthProvider>
-          {children}
-        </AuthProvider>
-      </body>
-    </html>
-  );
-}
-```
-
-###client/app/(auth)/login/page.ts
-```
-'use client';
-
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuth } from '@/lib/auth';
-
-export default function LoginPage() {
-  const router = useRouter();
-  const { login, isAuthenticated, isLoading, error, clearError } = useAuth();
-  
-  const [formData, setFormData] = useState({
-    email: '',
-    password: ''
-  });
-  const [showPassword, setShowPassword] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    clearError();
-    
-    try {
-      await login(formData);
-    } catch (err) {
-      // Error is handled by the auth context
-    }
-  };
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.push('/dashboard');
-    }
-  }, [isAuthenticated, router]);
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
     });
-  };
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-slate-900 via-slate-800 to-slate-900">
-      <div className="w-full max-w-md border border-slate-700 bg-slate-800/50 backdrop-blur-sm rounded-lg p-6">
-        <div className="space-y-1 text-center mb-6">
-          <h1 className="text-2xl font-bold text-white">
-            Admin Login
-          </h1>
-          <p className="text-slate-400">
-            Enter your credentials to access the admin dashboard
-          </p>
-        </div>
-        
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <div className="bg-red-500/10 border border-red-500/20 text-red-400 px-4 py-3 rounded-lg">
-              {error}
-            </div>
-          )}
-          
-          <div className="space-y-2">
-            <label htmlFor="email" className="block text-sm font-medium text-slate-300">
-              Email
-            </label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              placeholder="admin@example.com"
-              value={formData.email}
-              onChange={handleChange}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
-              required
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="password" className="block text-sm font-medium text-slate-300">
-              Password
-            </label>
-            <div className="relative">
-              <input
-                id="password"
-                name="password"
-                type={showPassword ? "text" : "password"}
-                placeholder="Enter your password"
-                value={formData.password}
-                onChange={handleChange}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent pr-10"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors"
-              >
-                {showPassword ? '🙈' : '👁️'}
-              </button>
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoading ? (
-              <span className="flex items-center justify-center">
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                Signing in...
-              </span>
-            ) : (
-              'Sign In'
-            )}
-          </button>
-        </form>
-
-        <div className="mt-4 text-center">
-          <a
-            href="/forgot-password"
-            className="text-sm text-slate-400 hover:text-slate-200 transition-colors"
-          >
-            Forgot your password?
-          </a>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-```
-
-###client/app/(auth)/forgot-password/page.ts
-```
-'use client';
-
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { apiService } from '@/lib/api';
-
-export default function ForgotPasswordPage() {
-  const router = useRouter();
-  const [email, setEmail] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setMessage(null);
-
-    try {
-      const response = await apiService.forgotPassword({ email });
-      
-      if (response.success) {
-        setMessage({
-          type: 'success',
-          text: 'Password reset instructions have been sent to your email address.'
-        });
-        // Clear the form
-        setEmail('');
-      } else {
-        setMessage({
-          type: 'error',
-          text: response.message || 'An error occurred. Please try again.'
-        });
-      }
-    } catch (err) {
-      setMessage({
-        type: 'error',
-        text: err instanceof Error ? err.message : 'An error occurred. Please try again.'
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-slate-900 via-slate-800 to-slate-900">
-      <div className="w-full max-w-md border border-slate-700 bg-slate-800/50 backdrop-blur-sm rounded-lg p-6">
-        <div className="space-y-1 text-center mb-6">
-          <h1 className="text-2xl font-bold text-white">
-            Forgot Password
-          </h1>
-          <p className="text-slate-400">
-            Enter your email address and we&apos;ll send you instructions to reset your password.
-          </p>
-        </div>
-        
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {message && (
-            <div className={`px-4 py-3 rounded-lg ${
-              message.type === 'success' 
-                ? 'bg-green-500/10 border border-green-500/20 text-green-400' 
-                : 'bg-red-500/10 border border-red-500/20 text-red-400'
-            }`}>
-              {message.text}
-            </div>
-          )}
-          
-          <div className="space-y-2">
-            <label htmlFor="email" className="block text-sm font-medium text-slate-300">
-              Email Address
-            </label>
-            <input
-              id="email"
-              type="email"
-              placeholder="admin@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:border-transparent"
-              required
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={isLoading || !email}
-            className="w-full px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoading ? (
-              <span className="flex items-center justify-center">
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                Sending reset instructions...
-              </span>
-            ) : (
-              'Send Reset Instructions'
-            )}
-          </button>
-        </form>
-
-        <div className="mt-4 text-center">
-          <button
-            onClick={() => router.push('/login')}
-            className="text-sm text-slate-400 hover:text-slate-200 transition-colors"
-          >
-            Back to Login
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-```
-
-###client/app/(dashboard)/analytics/page.ts
-```
-'use client';
-
-import React, { useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell,
-} from "recharts";
-import { ValueType } from "recharts/types/component/DefaultTooltipContent";
-import { format, subDays, startOfDay } from "date-fns";
-
-import Header from "@/components/Header";
-import { apiService, Appointment } from "@/lib/api";
-import { useToast } from "@/components/ui/use-toast";
-
-const COLORS = [
-  "hsl(var(--chart-1))",
-  "hsl(var(--chart-2))",
-  "hsl(var(--chart-3))",
-  "hsl(var(--chart-4))",
-  "hsl(var(--chart-5))",
-];
-
-// ✅ typed and moved outside component
-interface TooltipPayloadEntry {
-  date?: string;
-  name?: string;
-}
-
-interface CustomTooltipProps {
-  active?: boolean;
-  payload?: { value: ValueType; payload: TooltipPayloadEntry }[];
-}
-
-function CustomTooltip({ active, payload }: CustomTooltipProps) {
-  if (active && payload && payload.length) {
-    const entry = payload[0].payload as TooltipPayloadEntry;
-    return (
-      <div className="neumo-sm rounded-xl px-4 py-2">
-        <p className="text-sm font-medium text-foreground">
-          {entry.date ?? entry.name}
-        </p>
-        <p className="text-sm text-primary font-semibold">{payload[0].value}</p>
-      </div>
-    );
-  }
-  return null;
-}
-
-export default function Analytics() {
-  const { toast } = useToast();
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-
-  useEffect(() => {
-  let cancelled = false; // ✅ prevents setState on unmounted component
-
-  const load = async () => {
-    try {
-      const res = await apiService.getDashboard(1, 100);
-      if (!cancelled) setAppointments(res.data?.appointments ?? []);
-    } catch {
-      if (!cancelled) toast({ title: "Failed to load analytics", variant: "destructive" });
-    }
-  };
-
-  load();
-
-  return () => { cancelled = true; }; // cleanup
-}, [toast]);
-
-  // Status distribution
-  const statusData = React.useMemo(() => {
-    const counts = appointments.reduce<Record<string, number>>((acc, a) => {
-      acc[a.status] = (acc[a.status] || 0) + 1;
-      return acc;
-    }, {});
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [appointments]);
-
-  // Appointments per day (last 14 days)
-  const dailyData = React.useMemo(() => {
-    const data = [];
-    for (let i = 13; i >= 0; i--) {
-      const date = startOfDay(subDays(new Date(), i));
-      const dateStr = format(date, "yyyy-MM-dd");
-      const count = appointments.filter(
-        (a) => format(new Date(a.date_time), "yyyy-MM-dd") === dateStr
-      ).length;
-      data.push({ date: format(date, "MMM d"), count });
-    }
-    return data;
-  }, [appointments]);
-
-  return (
-    <div className="space-y-6">
-      <Header />
-
-      <motion.h1
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="text-2xl font-bold text-foreground"
-      >
-        Analytics
-      </motion.h1>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Daily trend */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="neumo rounded-2xl p-6"
-        >
-          <h3 className="text-base font-semibold text-foreground mb-4">
-            Daily Trend (14 days)
-          </h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={dailyData}>
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="hsl(var(--border))"
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  allowDecimals={false}
-                  tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <Tooltip content={<CustomTooltip />} cursor={false} />
-                <Line
-                  type="monotone"
-                  dataKey="count"
-                  stroke="hsl(var(--primary))"
-                  strokeWidth={2.5}
-                  dot={{ r: 4, fill: "hsl(var(--primary))" }}
-                  activeDot={{ r: 6 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </motion.div>
-
-        {/* Status distribution */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="neumo rounded-2xl p-6"
-        >
-          <h3 className="text-base font-semibold text-foreground mb-4">
-            Status Distribution
-          </h3>
-          <div className="h-64 flex items-center justify-center">
-            {statusData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={statusData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={3}
-                    dataKey="value"
-                  >
-                    {statusData.map((_, index) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={COLORS[index % COLORS.length]}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<CustomTooltip />} />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="text-sm text-muted-foreground">No data available</p>
-            )}
-          </div>
-          {statusData.length > 0 && (
-            <div className="flex flex-wrap gap-3 mt-4 justify-center">
-              {statusData.map((entry, i) => (
-                <div key={entry.name} className="flex items-center gap-2 text-sm">
-                  <div
-                    className="w-3 h-3 rounded-full"
-                    style={{ backgroundColor: COLORS[i % COLORS.length] }}
-                  />
-                  <span className="capitalize text-muted-foreground">{entry.name}</span>
-                  <span className="font-medium text-foreground">{entry.value}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </motion.div>
-      </div>
-    </div>
-  );
-}
-```
-
-###client/app/(dashboard)/appointments/page.ts
-```
-'use client';
-
-import React, { useState, useEffect, useCallback } from "react";
-import { useToast } from "@/components/ui/use-toast";
-import { motion } from "framer-motion";
-import { Plus } from "lucide-react";
-
-import Header from "@/components/Header";
-import AppointmentTable from "@/components/dashboard/AppointmentTable";
-import AppointmentDetailModal from "@/components/modals/AppointmentDetailModal";
-import CancelConfirmModal from "@/components/modals/CancelConfirmModal";
-import RescheduleModal from "@/components/modals/RescheduleModal";
-import CreateAppointmentModal from "@/components/modals/CreateAppointmentModal";
-import { apiService, Appointment, CreateAppointmentRequest } from "@/lib/api";
-
-export default function Appointments() {
-  const { toast } = useToast();
-
-  // ── Data state ────────────────────────────────────────────────────────────
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isMutating, setIsMutating] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
-
-  // ── Modal state ───────────────────────────────────────────────────────────
-  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
-  const [showDetail, setShowDetail] = useState(false);
-  const [showCancel, setShowCancel] = useState(false);
-  const [showReschedule, setShowReschedule] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
-  const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
-  const [rescheduleTarget, setRescheduleTarget] = useState<Appointment | null>(null);
-
-  // ── Fetch ─────────────────────────────────────────────────────────────────
-  const fetchAppointments = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const res = await apiService.getDashboard(1, 100);
-      setAppointments(res.data?.appointments ?? []);
-    } catch {
-      toast({ title: "Failed to load appointments", variant: "destructive" });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [toast]);
-
-  useEffect(() => {
-    fetchAppointments();
-  }, [fetchAppointments]);
-
-  // ── Update helper (optimistic) ────────────────────────────────────────────
-  const mutate = useCallback(
-    async (id: number, data: { status?:Appointment['status'] ; date_time?: string }) => {
-      setIsMutating(true);
-      try {
-        await apiService.updateAppointment(id, data);
-        setAppointments((prev) =>
-          prev.map((a) => (a.id === id ? { ...a, ...data } : a))
-        );
-      } catch {
-        toast({ title: "Something went wrong", variant: "destructive" });
-        throw new Error("Mutation failed");
-      } finally {
-        setIsMutating(false);
-      }
-    },
-    [toast]
-  );
-
-  // ── Create ────────────────────────────────────────────────────────────────
-  const handleCreate = useCallback(
-    async (data: CreateAppointmentRequest) => {
-      setIsCreating(true);
-      try {
-        const res = await apiService.createAppointment(data);
-        // Append the new appointment locally — no re-fetch needed
-        setAppointments((prev) => [...prev, res.data]);
-        toast({ title: "Appointment created" });
-        setShowCreate(false);
-      } catch {
-        toast({ title: "Failed to create appointment", variant: "destructive" });
-      } finally {
-        setIsCreating(false);
-      }
-    },
-    [toast]
-  );
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
-  const handleConfirm = async (apt: Appointment) => {
-    await mutate(apt.id, { status: "confirmed" });
-    toast({ title: "Appointment confirmed" });
-  };
-
-  const handleCancelClick = (apt: Appointment) => {
-    setCancelTarget(apt);
-    setShowCancel(true);
-  };
-
-  const handleCancelConfirm = async () => {
-    if (!cancelTarget) return;
-    await mutate(cancelTarget.id, { status: "cancelled" });
-    toast({ title: "Appointment cancelled" });
-    setShowCancel(false);
-    setCancelTarget(null);
-  };
-
-  const handleRescheduleClick = (apt: Appointment) => {
-    setRescheduleTarget(apt);
-    setShowReschedule(true);
-  };
-
-  const handleRescheduleSubmit = async (apt: Appointment, newDateTime: string) => {
-    await mutate(apt.id, { date_time: newDateTime });
-    toast({ title: "Appointment rescheduled" });
-    setShowReschedule(false);
-    setRescheduleTarget(null);
-  };
-
-  const handleView = (apt: Appointment) => {
-    setSelectedAppointment(apt);
-    setShowDetail(true);
-  };
-
-  const handleMarkCompleted = async (apt: Appointment) => {
-    await mutate(apt.id, { status: "completed" });
-    toast({ title: "Marked as completed" });
-  };
-
-  const handleMarkMissed = async (apt: Appointment) => {
-    await mutate(apt.id, { status: "missed" });
-    toast({ title: "Marked as missed" });
-  };
-
-  // ── Render ────────────────────────────────────────────────────────────────
-  return (
-    <div className="space-y-6">
-      <Header />
-
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between"
-      >
-        <h1 className="text-2xl font-bold text-foreground">All Appointments</h1>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="neumo-btn px-4 py-2.5 rounded-xl text-sm font-medium text-primary flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" /> New Appointment
-        </button>
-      </motion.div>
-
-      <AppointmentTable
-        appointments={appointments}
-        isLoading={isLoading}
-        onConfirm={handleConfirm}
-        onCancel={handleCancelClick}
-        onReschedule={handleRescheduleClick}
-        onView={handleView}
-      />
-
-      <AppointmentDetailModal
-        appointment={selectedAppointment}
-        open={showDetail}
-        onClose={() => setShowDetail(false)}
-        onConfirm={handleConfirm}
-        onCancel={handleCancelClick}
-        onReschedule={handleRescheduleClick}
-        onMarkCompleted={handleMarkCompleted}
-        onMarkMissed={handleMarkMissed}
-      />
-
-      <CancelConfirmModal
-        open={showCancel}
-        onClose={() => { setShowCancel(false); setCancelTarget(null); }}
-        onConfirm={handleCancelConfirm}
-        isLoading={isMutating}
-        clientName={cancelTarget?.client_name}
-      />
-
-      <RescheduleModal
-        appointment={rescheduleTarget}
-        open={showReschedule}
-        onClose={() => { setShowReschedule(false); setRescheduleTarget(null); }}
-        onSubmit={handleRescheduleSubmit}
-        isLoading={isMutating}
-      />
-
-      <CreateAppointmentModal
-        open={showCreate}
-        onClose={() => setShowCreate(false)}
-        onSubmit={handleCreate}
-        isLoading={isCreating}
-      />
-    </div>
-  );
-}
-```
-
-###client/app/(dashboard)/dashboard/page.ts
-```
-'use client';
-
-import React, { useState, useEffect, useCallback } from "react";
-import { useToast } from "@/components/ui/use-toast";
-import { CalendarCheck, CalendarDays, Percent, XCircle } from "lucide-react";
-import { startOfDay, endOfDay, startOfWeek, endOfWeek } from "date-fns";
-
-import Header from "@/components/Header";
-import StatsCard from "@/components/dashboard/StatsCard";
-import AppointmentChart from "@/components/dashboard/AppointmentChart";
-import AppointmentTable from "@/components/dashboard/AppointmentTable";
-import AppointmentDetailModal from "@/components/modals/AppointmentDetailModal";
-import CancelConfirmModal from "@/components/modals/CancelConfirmModal";
-import RescheduleModal from "@/components/modals/RescheduleModal";
-import { apiService, Appointment } from "@/lib/api";
-
-export default function Dashboard() {
-  const { toast } = useToast();
-
-  // ── Data state ──────────────────────────────────────────────────────────
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isMutating, setIsMutating] = useState(false);
-
-  // ── Modal state ──────────────────────────────────────────────────────────
-  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
-  const [showDetail, setShowDetail] = useState(false);
-  const [showCancel, setShowCancel] = useState(false);
-  const [showReschedule, setShowReschedule] = useState(false);
-  const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
-  const [rescheduleTarget, setRescheduleTarget] = useState<Appointment | null>(null);
-
-  // ── Fetch ────────────────────────────────────────────────────────────────
-  const fetchAppointments = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      const res = await apiService.getDashboard(1, 100);
-
-      console.log('==============dashboard============', res.data.appointments);
-      setAppointments(res.data?.appointments ?? []);
-    } catch {
-      toast({ title: "Failed to load appointments", variant: "destructive" });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [toast]);
-
-  useEffect(() => {
-    fetchAppointments();
-  }, [fetchAppointments]);
-
-  // ── Shared mutation helper ───────────────────────────────────────────────
-  const mutate = useCallback(
-    async (id: number, data: { status?: Appointment['status']; date_time?: string }) => {
-      setIsMutating(true);
-      try {
-        await apiService.updateAppointment(id, data);
-        // Optimistically update local state instead of re-fetching
-        setAppointments((prev) =>
-          prev.map((a) => (a.id === id ? { ...a, ...data } : a))
-        );
-      } catch {
-        toast({ title: "Something went wrong", variant: "destructive" });
-        throw new Error("Mutation failed"); // re-throw so callers can bail
-      } finally {
-        setIsMutating(false);
-      }
-    },
-    [toast]
-  );
-
-  // ── Handlers ─────────────────────────────────────────────────────────────
-  const handleConfirm = async (apt: Appointment) => {
-    await mutate(apt.id, { status: "confirmed" });
-    toast({ title: "Appointment confirmed", description: `${apt.client_name}'s appointment has been confirmed.` });
-  };
-
-  const handleCancelClick = (apt: Appointment) => {
-    setCancelTarget(apt);
-    setShowCancel(true);
-  };
-
-  const handleCancelConfirm = async () => {
-    if (!cancelTarget) return;
-    await mutate(cancelTarget.id, { status: "cancelled" });
-    toast({ title: "Appointment cancelled", description: `${cancelTarget.client_name}'s appointment has been cancelled.` });
-    setShowCancel(false);
-    setCancelTarget(null);
-  };
-
-  const handleRescheduleClick = (apt: Appointment) => {
-    setRescheduleTarget(apt);
-    setShowReschedule(true);
-  };
-
-  const handleRescheduleSubmit = async (apt: Appointment, newDateTime: string) => {
-    await mutate(apt.id, { date_time: newDateTime });
-    toast({ title: "Appointment rescheduled", description: `${apt.client_name}'s appointment has been rescheduled.` });
-    setShowReschedule(false);
-    setRescheduleTarget(null);
-  };
-
-  const handleView = (apt: Appointment) => {
-    setSelectedAppointment(apt);
-    setShowDetail(true);
-  };
-
-  const handleMarkCompleted = async (apt: Appointment) => {
-    await mutate(apt.id, { status: "completed" });
-    toast({ title: "Marked as completed" });
-  };
-
-  const handleMarkMissed = async (apt: Appointment) => {
-    await mutate(apt.id, { status: "missed" });
-    toast({ title: "Marked as missed" });
-  };
-
-  // ── Stats ────────────────────────────────────────────────────────────────
-  const today = new Date();
-  const todayStart = startOfDay(today);
-  const todayEnd = endOfDay(today);
-  const weekStart = startOfWeek(today, { weekStartsOn: 1 });
-  const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
-
-  const todayAppointments = appointments.filter((a) => {
-    const d = new Date(a.date_time);
-    return d >= todayStart && d <= todayEnd && a.status !== "cancelled";
-  });
-
-  const weekAppointments = appointments.filter((a) => {
-    const d = new Date(a.date_time);
-    return d >= weekStart && d <= weekEnd && a.status !== "cancelled";
-  });
-
-  const completedCount = appointments.filter((a) => a.status === "completed").length;
-  const totalNonCancelled = appointments.filter((a) => a.status !== "cancelled").length;
-  const completionRate = totalNonCancelled > 0
-    ? Math.round((completedCount / totalNonCancelled) * 100)
-    : 0;
-
-  const cancellationsToday = appointments.filter((a) => {
-    const d = new Date(a.date_time);
-    return d >= todayStart && d <= todayEnd && a.status === "cancelled";
-  }).length;
-
-  const stats = [
-    { title: "Today's Appointments", value: todayAppointments.length, icon: CalendarCheck, color: "hsl(var(--primary))", subtitle: "Scheduled for today" },
-    { title: "This Week", value: weekAppointments.length, icon: CalendarDays, color: "hsl(var(--chart-2))", subtitle: "Mon – Sun" },
-    { title: "Completion Rate", value: `${completionRate}%`, icon: Percent, color: "hsl(var(--chart-3))", subtitle: "Of all appointments" },
-    { title: "Cancellations Today", value: cancellationsToday, icon: XCircle, color: "hsl(var(--destructive))", subtitle: "Cancelled today" },
-  ];
-
-  // ── Render ───────────────────────────────────────────────────────────────
-  return (
-    <div className="space-y-6">
-      <Header />
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat, i) => (
-          <StatsCard key={stat.title} {...stat} index={i} />
-        ))}
-      </div>
-
-      <AppointmentChart appointments={appointments} />
-
-      <AppointmentTable
-        appointments={appointments}
-        isLoading={isLoading}
-        onConfirm={handleConfirm}
-        onCancel={handleCancelClick}
-        onReschedule={handleRescheduleClick}
-        onView={handleView}
-      />
-
-      <AppointmentDetailModal
-        appointment={selectedAppointment}
-        open={showDetail}
-        onClose={() => setShowDetail(false)}
-        onConfirm={handleConfirm}
-        onCancel={handleCancelClick}
-        onReschedule={handleRescheduleClick}
-        onMarkCompleted={handleMarkCompleted}
-        onMarkMissed={handleMarkMissed}
-      />
-
-      <CancelConfirmModal
-        open={showCancel}
-        onClose={() => { setShowCancel(false); setCancelTarget(null); }}
-        onConfirm={handleCancelConfirm}
-        isLoading={isMutating}
-        clientName={cancelTarget?.client_name}
-      />
-
-      <RescheduleModal
-        appointment={rescheduleTarget}
-        open={showReschedule}
-        onClose={() => { setShowReschedule(false); setRescheduleTarget(null); }}
-        onSubmit={handleRescheduleSubmit}
-        isLoading={isMutating}
-      />
-    </div>
-  );
-}
-```
-
-###client/app/(dashboard)/settings/page.ts
-```
-'use client';
-
-import React, { useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import { User, Mail } from "lucide-react";
-import { Label } from "@/components/ui/label";
-import { useAuth } from "@/lib/auth";
-import { apiService, Admin } from "@/lib/api";
-import Header from "@/components/Header";
-
-export default function Settings() {
-  const [user, setUser] = useState<Admin | null>(null);
-  const [loading, setLoading] = useState(true);
-  const { admin } = useAuth();
-
-  useEffect(() => {
-    if (admin) {
-      setUser(admin);
-      setLoading(false);
-    } else {
-      // Try to fetch admin profile if not available in auth context
-      const fetchAdminProfile = async () => {
-        try {
-          const response = await apiService.getAdminProfile();
-          if (response.success) {
-            setUser(response.data);
-          }
-        } catch (error) {
-          console.error('Failed to fetch admin profile:', error);
-        } finally {
-          setLoading(false);
+    if (appointment.client_phone) {
+      await whatsappQueue.add('send reminder', jobData, {
+        delay: scheduledTime.getTime() - Date.now(),
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 2000
         }
-      };
-      fetchAdminProfile();
+      });
     }
-  }, [admin]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-4 border-border border-t-primary rounded-full animate-spin" />
-      </div>
-    );
+    logger.info(`Scheduled ${type} reminder for appointment ${appointment.id} at ${scheduledTime.toISOString()}`);
   }
 
-  return (
-    <div className="space-y-6">
-      <Header />
+  private async markRemindersScheduled(appointmentId: number): Promise<void> {
+    const updateQuery = `
+      UPDATE appointments
+      SET reminder_scheduled_at = NOW()
+      WHERE id = $1
+    `;
+    await this.db.query(updateQuery, [appointmentId]);
+  }
 
-      <motion.h1
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="text-2xl font-bold text-foreground"
-      >
-        Settings
-      </motion.h1>
+  private async cleanupOldAppointments(): Promise<void> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 14); // 14 days ago
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="neumo rounded-2xl p-6 max-w-lg"
-      >
-        <h3 className="text-base font-semibold text-foreground mb-4">Profile</h3>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label className="text-sm flex items-center gap-2">
-              <User className="w-3.5 h-3.5" /> Full Name
-            </Label>
-            <div className="neumo-inset rounded-xl px-4 py-2.5 text-sm text-foreground">
-              {user?.name || "Not set"}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-sm flex items-center gap-2">
-              <Mail className="w-3.5 h-3.5" /> Email
-            </Label>
-            <div className="neumo-inset rounded-xl px-4 py-2.5 text-sm text-foreground">
-              {user?.email || "Not set"}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-sm">Role</Label>
-            <div className="neumo-inset rounded-xl px-4 py-2.5 text-sm text-foreground capitalize">
-              {user?.role || "user"}
-            </div>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
+    try {
+      // Start a transaction to ensure atomicity
+      await this.db.query('BEGIN');
+
+      // Step 1: Archive notification logs before deleting appointments
+      const archiveQuery = `
+        INSERT INTO archived_notification_logs (
+          original_id, appointment_id, client_id, channel, notification_type,
+          status, template_used, error_message, sent_at, created_at, archive_reason
+        )
+        SELECT
+          id, appointment_id, client_id, channel, notification_type,
+          status, template_used, error_message, sent_at, created_at, 'appointment_cleanup'
+        FROM notification_logs
+        WHERE appointment_id IN (
+          SELECT id FROM appointments
+          WHERE status IN ('completed', 'missed', 'cancelled')
+            AND updated_at < $1
+        )
+      `;
+
+      const archiveResult = await this.db.query(archiveQuery, [cutoffDate]);
+      const archivedCount = archiveResult.rowCount || 0;
+
+      if (archivedCount > 0) {
+        logger.info(`Archived ${archivedCount} notification logs before appointment cleanup`);
+      }
+
+      // Step 2: Delete old appointments (notification_logs.appointment_id will be set to NULL due to ON DELETE SET NULL)
+      const deleteQuery = `
+        DELETE FROM appointments
+        WHERE status IN ('completed', 'missed', 'cancelled')
+          AND updated_at < $1
+      `;
+
+      const deleteResult = await this.db.query(deleteQuery, [cutoffDate]);
+      const deletedCount = deleteResult.rowCount || 0;
+
+      // Step 3: Clean up orphaned notification logs (those with NULL appointment_id that are old)
+      const cleanupOrphansQuery = `
+        DELETE FROM notification_logs
+        WHERE appointment_id IS NULL
+          AND created_at < $1
+      `;
+
+      const orphanResult = await this.db.query(cleanupOrphansQuery, [cutoffDate]);
+      const orphanCount = orphanResult.rowCount || 0;
+
+      // Commit the transaction
+      await this.db.query('COMMIT');
+
+      if (deletedCount > 0) {
+        logger.info(`Cleaned up ${deletedCount} old appointments`);
+      } else {
+        logger.info('No old appointments found for cleanup');
+      }
+
+      if (orphanCount > 0) {
+        logger.info(`Cleaned up ${orphanCount} orphaned notification logs`);
+      }
+
+    } catch (error) {
+      // Rollback the transaction if anything fails
+      await this.db.query('ROLLBACK');
+      logger.error('Error in cleanup job - transaction rolled back:', error);
+      throw error;
+    }
+  }
+
+  public async shutdown(): Promise<void> {
+    if (this.db) {
+      this.db.release();
+      logger.info('Reminder scheduler database connection closed');
+    }
+  }
 }
-```
 
-###client/app/(dashboard)/layout.ts
-```
-'use client';
+// Export singleton instance
+export const reminderScheduler = new ReminderScheduler();
 
-import React, { useState } from 'react';
-import { useAuth } from '../../lib/auth';
-import { useRouter } from 'next/navigation';
-import Sidebar from '@/components/Sidebar';
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  await reminderScheduler.shutdown();
+});
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const [collapsed, setCollapsed] = useState(false);
-  const { isAuthenticated, isLoading } = useAuth();
-  const router = useRouter();
-
-  // Show loading spinner while checking authentication
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-slate-900 via-slate-800 to-slate-900">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-slate-400">Checking authentication...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Redirect to login if not authenticated
-  if (!isAuthenticated) {
-    router.push('/login');
-    return null;
-  }
-
-  return (
-    <div className="min-h-screen bg-background">
-      <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} />
-      <main
-        className="transition-all duration-300"
-        style={{ marginLeft: collapsed ? 72 : 260 }}
-      >
-        <div className="p-4 md:p-6 lg:p-8 max-w-7xl">
-          {children}
-        </div>
-      </main>
-    </div>
-  );
-}
-```
+process.on('SIGINT', async () => {
+  await reminderScheduler.shutdown();
+});

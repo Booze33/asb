@@ -169,6 +169,14 @@ class ApiService {
     return this.handleResponse<{ success: boolean; message: string }>(response);
   }
 
+  async getAdminProfile(): Promise<AdminResponse> {
+    const response = await fetch(`${this.baseURL}/api/admin/profile`, {
+      method: 'GET',
+      headers: this.getHeaders(true),     // sends Bearer token
+    });
+    return this.handleResponse<AdminResponse>(response);
+  }
+
   async getDashboard(page = 1, limit = 10, filters?: DashboardFilters): Promise<DashboardResponse> {
     const params = new URLSearchParams({ page: page.toString(), limit: limit.toString() });
     if (filters?.status) params.append('status', filters.status);

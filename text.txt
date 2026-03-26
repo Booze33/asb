@@ -1,9 +1,0 @@
-public static async create(): Promise<ReminderScheduler> {
-  const scheduler = new ReminderScheduler();
-  await scheduler.initializeDatabase();
-  scheduler.scheduleReminderJobs();
-  scheduler.scheduleCleanupJob();
-  return scheduler;
-}
-
-const scheduler = await ReminderScheduler.create();

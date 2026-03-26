@@ -105,8 +105,22 @@ class ApiService {
     this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
   }
 
+  private getTokenFromCookies(): string | null {
+    if (typeof document === 'undefined') return null;
+
+    const match = document.cookie
+      .split('; ')
+      .find((row) => row.startsWith('admin_token='));
+
+    if (!match) return null;
+    return decodeURIComponent(match.split('=')[1] || '');
+  }
+
   private getHeaders(): HeadersInit {
+    const token = this.getTokenFromCookies();
+
     return {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       'Content-Type': 'application/json',
     };
   }
@@ -149,7 +163,7 @@ class ApiService {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(credentials),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<LoginResponse>(response);
@@ -160,7 +174,7 @@ class ApiService {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(request),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<ForgotPasswordResponse>(response);
@@ -171,7 +185,7 @@ class ApiService {
     const response = await fetch(`${this.baseURL}/api/admin/profile`, {
       method: 'GET',
       headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<AdminResponse>(response);
@@ -181,7 +195,7 @@ class ApiService {
     const response = await fetch(`${this.baseURL}/api/admin/logout`, {
       method: 'POST',
       headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<{ success: boolean; message: string }>(response);
@@ -207,7 +221,7 @@ class ApiService {
     const response = await fetch(`${this.baseURL}/api/admin/dashboard?${params.toString()}`, {
       method: 'GET',
       headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<DashboardResponse>(response);
@@ -219,7 +233,7 @@ class ApiService {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(data),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<CreateAppointmentResponse>(response);
@@ -229,7 +243,7 @@ class ApiService {
     const response = await fetch(`${this.baseURL}/api/appointments/${id}?email=${encodeURIComponent(email)}`, {
       method: 'GET',
       headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<{ success: boolean; data: Appointment }>(response);
@@ -240,7 +254,7 @@ class ApiService {
       method: 'PUT',
       headers: this.getHeaders(),
       body: JSON.stringify(data),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<UpdateAppointmentResponse>(response);
@@ -250,7 +264,7 @@ class ApiService {
     const response = await fetch(`${this.baseURL}/api/admin/appointments/${id}`, {
       method: 'DELETE',
       headers: this.getHeaders(),
-      credentials: 'include', // Include cookies in the request
+      credentials: 'include',
     });
 
     return this.handleResponse<{ success: boolean; message: string }>(response);

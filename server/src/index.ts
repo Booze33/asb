@@ -4,6 +4,7 @@ import pool from './config/database';
 import { emailQueue, whatsappQueue } from './jobs/queue';
 import { ReminderScheduler } from './jobs/reminderScheduler';
 import { queueMonitoring } from './jobs/monitoring';
+import { cacheService } from './config/cache';
 
 const PORT = process.env.PORT || 3000;
 
@@ -12,6 +13,20 @@ async function startServer() {
     // Test database connection
     await pool.connect();
     logger.info('Database connected successfully');
+
+    // Test Redis connection
+    logger.info('Connecting to Redis...');
+    const redisStats = await cacheService.getStats();
+    if (redisStats.connected) {
+      logger.info('Redis connected successfully', { 
+        host: process.env.REDIS_HOST,
+        port: process.env.REDIS_PORT,
+        keyCount: redisStats.keyCount 
+      });
+    } else {
+      logger.error('Redis connection failed');
+      throw new Error('Redis connection failed');
+    }
 
     // Start background jobs
     logger.info('Starting background job processors...');

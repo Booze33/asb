@@ -25,7 +25,7 @@ export interface ApiResponse {
  */
 export async function bookAppointment(appointmentData: AppointmentData): Promise<ApiResponse> {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3008';
+    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://server-divine-grass-8917.fly.dev';
     const response = await fetch(`${baseUrl}/api/appointments`, {
       method: 'POST',
       headers: {

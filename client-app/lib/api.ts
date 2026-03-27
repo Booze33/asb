@@ -103,7 +103,7 @@ class ApiService {
   private baseURL: string;
 
   constructor() {
-    this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+    this.baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://server-divine-grass-8917.fly.dev';
   }
 
   private getHeaders(authenticated = false): HeadersInit {
@@ -244,7 +244,7 @@ export interface CacheHealth {
 
 // Cache endpoints
 export async function getCacheStats(): Promise<{ success: boolean; data: CacheStats }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://server-divine-grass-8917.fly.dev';
   const token = getToken();
   const response = await fetch(`${baseURL}/api/cache/stats`, {
     method: 'GET',
@@ -286,7 +286,7 @@ export async function getCacheStats(): Promise<{ success: boolean; data: CacheSt
 }
 
 export async function clearCache(): Promise<{ success: boolean; message: string }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://server-divine-grass-8917.fly.dev';
   const token = getToken();
   const response = await fetch(`${baseURL}/api/cache/clear`, {
     method: 'POST',
@@ -328,7 +328,7 @@ export async function clearCache(): Promise<{ success: boolean; message: string 
 }
 
 export async function invalidateCache(pattern: string): Promise<{ success: boolean; message: string }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://server-divine-grass-8917.fly.dev';
   const token = getToken();
   const response = await fetch(`${baseURL}/api/cache/invalidate`, {
     method: 'POST',
@@ -371,7 +371,7 @@ export async function invalidateCache(pattern: string): Promise<{ success: boole
 }
 
 export async function getCacheHealth(): Promise<{ success: boolean; data: CacheHealth }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://server-divine-grass-8917.fly.dev';
   const token = getToken();
   const response = await fetch(`${baseURL}/api/cache/health`, {
     method: 'GET',
@@ -414,7 +414,7 @@ export async function getCacheHealth(): Promise<{ success: boolean; data: CacheH
 
 // Health endpoints
 export async function getHealth(): Promise<{ status: string; timestamp: string; uptime: number }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://server-divine-grass-8917.fly.dev';
   const response = await fetch(`${baseURL}/health`, {
     method: 'GET',
     headers: {
@@ -454,7 +454,7 @@ export async function getHealth(): Promise<{ status: string; timestamp: string; 
 }
 
 export async function getReadiness(): Promise<{ status: string; timestamp: string }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://server-divine-grass-8917.fly.dev';
   const response = await fetch(`${baseURL}/health/ready`, {
     method: 'GET',
     headers: {
@@ -494,7 +494,7 @@ export async function getReadiness(): Promise<{ status: string; timestamp: strin
 }
 
 export async function getLiveness(): Promise<{ status: string; timestamp: string; pid: number; uptime: number }> {
-  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3008';
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://server-divine-grass-8917.fly.dev';
   const response = await fetch(`${baseURL}/health/live`, {
     method: 'GET',
     headers: {

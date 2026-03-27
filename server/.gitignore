@@ -5,6 +5,8 @@
 .env.test
 .env.production
 
+fly.toml
+
 # Logs
 logs
 *.log
